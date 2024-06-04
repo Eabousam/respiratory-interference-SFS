@@ -56,6 +56,7 @@ setwd(repo)
 ```{r}
 encounter_rv_cv_pairs_conf = readRDS("encounter_data_pairs.rds")
 
+sum(length(unique(encounter_rv_cv_pairs_conf$individual)))
 ```
 
 
@@ -315,7 +316,7 @@ Rhinovirus_TimeDependent <- rbind(DtRhinovirus1, DtRhinovirus2)
 
 Rhinovirus_TimeDependent$Rhinovirus_TimeDependent <- factor(Rhinovirus_TimeDependent$Rhinovirus_TimeDependent,
                                                            #,'30 < Day <= 60'
-                                                            levels = c("No", 'Day <= 14','14 < Day <= 30', '30 < Day <= 60' ,"60 < Day <= 180", "180 < Day <= 365", "Day > 365"))
+                                                            levels = c("No", 'Day <= 14','14 < Day <= 30', '30 < Day <= 60' ,"60 < Day <= 180", "180 < Day <= 365"))
 Rhinovirus_TimeDependent <- Rhinovirus_TimeDependent[, c("individual","sample", "enrollment_date", "followupDate", 
                                                         "start_adjusted", "stop_adjusted",'gap_adjusted', "present_rv_n",
                                                         "Secondary_Group","date", "Rhinovirus_TimeDependent")]
@@ -498,7 +499,7 @@ Adenovirus_TimeDependent %>%
 ```
 
 
-## (3.3). RSV
+## (3.4). RSV
 ```{r}
 #######################################################################################################################
 # We assume that the targeted viral infection is rhinovirus, and any subsequent viral infections after the first 
@@ -579,7 +580,7 @@ table(RSV_TimeDependent$RSV_TimeDependent)
 
 ```
 
-## (3.3). IAV
+## (3.5). IAV
 ```{r}
 #######################################################################################################################
 # We assume that the targeted viral infection is rhinovirus, and any subsequent viral infections after the first 
@@ -662,7 +663,7 @@ table(IAV_TimeDependent$IAV_TimeDependent)
 
 
 
-## (3.3). IBV
+## (3.6). IBV
 ```{r}
 #######################################################################################################################
 # We assume that the targeted viral infection is rhinovirus, and any subsequent viral infections after the first 
@@ -776,22 +777,22 @@ table(Rhinovirus_TimeDependent_cov$Rhinovirus_TimeDependent)
 fomular_unadj <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ Rhinovirus_TimeDependent
 
 # Formula Rhinovirus adjusted
-fomular <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ Rhinovirus_TimeDependent + sex+ symptoms+agebin
+fomular <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ Rhinovirus_TimeDependent + sex+agebin+symptoms
 # Rhinovirus model
 model <- coxph(fomular,cluster = individual, data = Rhinovirus_TimeDependent_cov)
+
+# Model Summary
 tab_model(model)
 
 # Proportional hazards test: Schofield residual test
 cox.zph(model) # Non-significance represents for valid proportional hazard assumption
-# Coefficient table
-resultTable <- cbind(Summary$coefficients, Summary$conf.int[, c('lower .95', 'upper .95')])
-resultTable
+
+```
 
 
-Rhinovirus_TimeDependent_cov %>%
-  ggplot(aes(x = Rhinovirus_TimeDependent, y = Secondary_Group, group = Rhinovirus_TimeDependent)) +
-  geom_point()
+# Visualizing proportions
 
+```{r}
 
 # Step 1: Calculate the proportions
 proportion_data <- Rhinovirus_TimeDependent_cov %>%
@@ -839,16 +840,15 @@ fomular_unadj <- Surv(start_adjusted, stop_adjusted, Secondary_Group_cv) ~ Covid
 fomular <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ Covid_TimeDependent + sex + symptoms + agebin 
 # Covid model
 model <- coxph(fomular, cluster = individual, data = Covid_TimeDependent_cov)
+
+# Model summary
 tab_model(model)
+
+
 # Proportional hazards test: Schofield residual test
 cox.zph(model) # Non-significance represents for valid proportional hazard assumption
 
-# Coefficient table
-resultTable <- cbind(Summary$coefficients, Summary$conf.int[, c('lower .95', 'upper .95')])
-resultTable
 
-
-range(Rhinovirus_TimeDependent_cov$enrollment_date)
 ```
 
 ## (4.3). Adv Cox regression
@@ -864,7 +864,9 @@ Adenovirus_TimeDependent_cov <- Adenovirus_TimeDependent %>%
     TRUE ~ as.character(agebin))) %>%
     mutate(agebin = factor(agebin, levels = c("17-45", "< 5", "46-65", "6-16", "66+"))) %>%
   filter(sex != "other") %>%
-  mutate(sex = factor(sex, levels =c("female", "male"))) 
+  mutate(sex = factor(sex, levels =c("female", "male")))  %>%
+  mutate(symptoms = if_else(symptoms %in% c("none", "{}", "{none}", "{none,none_2}"), "No", 
+                            if_else(is.na(symptoms), NA_character_, "Yes")))
   
 table(Adenovirus_TimeDependent_cov$Adenovirus_TimeDependent)
 
@@ -872,25 +874,24 @@ table(Adenovirus_TimeDependent_cov$Adenovirus_TimeDependent)
 
 # Formula Adv
 fomular <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ Adenovirus_TimeDependent + sex +  symptoms + agebin
-# Covid model
+# Adenovirus Cox model
 model <- coxph(fomular, cluster = individual, data = Adenovirus_TimeDependent_cov)
+
+# Model Summary
 tab_model(model)
+
 # Proportional hazards test: Schofield residual test
 cox.zph(model) # Non-significance represents for valid proportional hazard assumption
 
-# Coefficient table
-resultTable <- cbind(Summary$coefficients, Summary$conf.int[, c('lower .95', 'upper .95')])
-resultTable
 
 
 ```
 
-## (4.3). RSV Cox regression
+## (4.4). RSV Cox regression
 
 ```{r}
 
 RSV_TimeDependent_cov <- RSV_TimeDependent %>%
-  #filter(!(present_rsv_n == 1 & Secondary_Group ==1)) %>%
   left_join(DtAdjusted %>% 
               dplyr::select(individual,sample, agebin, sex, symptoms), by = c("individual","sample")) %>%
   mutate(agebin = case_when(
@@ -898,36 +899,37 @@ RSV_TimeDependent_cov <- RSV_TimeDependent %>%
     TRUE ~ as.character(agebin))) %>%
     mutate(agebin = factor(agebin, levels = c("17-45", "< 5", "46-65", "6-16", "66+"))) %>%
   filter(sex != "other") %>%
-  mutate(sex = factor(sex, levels =c("female", "male")))
+  mutate(sex = factor(sex, levels =c("female", "male"))) %>%
+  mutate(symptoms = if_else(symptoms %in% c("none", "{}", "{none}", "{none,none_2}"), "No", 
+                            if_else(is.na(symptoms), NA_character_, "Yes")))
   
-table(RSV_TimeDependent_cov$RSV_TimeDependent)
 
-# Covid primary unadjusted
+
+
+# RSV primary unadjusted
 fomular_unadj <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ RSV_TimeDependent
 
-# Formula Covid adjusted
+# Formula RSV adjusted
 fomular <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ RSV_TimeDependent + sex +  symptoms  + agebin
-# Covid model
+# RSV model
 model <- coxph(fomular, cluster = individual, data = RSV_TimeDependent_cov)
+
+# Model Summary
 tab_model(model)
+
 # Proportional hazards test: Schofield residual test
 cox.zph(model) # Non-significance represents for valid proportional hazard assumption
-
-# Coefficient table
-resultTable <- cbind(Summary$coefficients, Summary$conf.int[, c('lower .95', 'upper .95')])
-resultTable
 
 
 ```
 
 
 
-## (4.3). IAV Cox regression
+## (4.5). IAV Cox regression
 
 ```{r}
 
 IAV_TimeDependent_cov <- IAV_TimeDependent %>%
-  #filter(!(present_iav_n == 1 & Secondary_Group ==1)) %>%
   left_join(DtAdjusted %>%
               dplyr::select(individual,sample, agebin, sex, symptoms), by = c("individual","sample")) %>%
   mutate(agebin = case_when(
@@ -935,30 +937,32 @@ IAV_TimeDependent_cov <- IAV_TimeDependent %>%
     TRUE ~ as.character(agebin))) %>%
     mutate(agebin = factor(agebin, levels = c("17-45", "< 5", "46-65", "6-16", "66+"))) %>%
   filter(sex != "other") %>%
-  mutate(sex = factor(sex, levels =c("female", "male")))
+  mutate(sex = factor(sex, levels =c("female", "male"))) %>%
+  mutate(symptoms = if_else(symptoms %in% c("none", "{}", "{none}", "{none,none_2}"), "No", 
+                            if_else(is.na(symptoms), NA_character_, "Yes")))
   
-table(IAV_TimeDependent_cov$IAV_TimeDependent)
+
+
 
 # IAV primary unadjusted
 fomular_unadj <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ IAV_TimeDependent
 
-# Formula Covid adjusted
+# Formula IAV adjusted
 fomular <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ IAV_TimeDependent + sex +  symptoms  + agebin
-# Covid model
+# IAV model
 model <- coxph(fomular, cluster = individual, data = IAV_TimeDependent_cov)
+
+# Model Summary
 tab_model(model)
+
 # Proportional hazards test: Schofield residual test
 cox.zph(model) # Non-significance represents for valid proportional hazard assumption
-
-# Coefficient table
-resultTable <- cbind(Summary$coefficients, Summary$conf.int[, c('lower .95', 'upper .95')])
-resultTable
 
 
 ```
 
 
-## (4.3). IBV Cox regression
+## (4.6). IBV Cox regression
 
 ```{r}
 
@@ -971,24 +975,24 @@ IBV_TimeDependent_cov <- IBV_TimeDependent %>%
     TRUE ~ as.character(agebin))) %>%
     mutate(agebin = factor(agebin, levels = c("17-45", "< 5", "46-65", "6-16", "66+"))) %>%
   filter(sex != "other") %>%
-  mutate(sex = factor(sex, levels =c("female", "male")))
+  mutate(sex = factor(sex, levels =c("female", "male"))) %>%
+  mutate(symptoms = if_else(symptoms %in% c("none", "{}", "{none}", "{none,none_2}"), "No", 
+                            if_else(is.na(symptoms), NA_character_, "Yes")))
   
-table(Adenovirus_TimeDependent_cov$agebin)
 
-# Covid primary unadjusted
-fomular_unadj <- Surv(start_adjusted, stop_adjusted, Secondary_Group_cv) ~ Covid_TimeDependent
+# IBV primary unadjusted
+fomular_unadj <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ IBV_TimeDependent
 
-# Formula Covid adjusted
+# Formula IBV adjusted
 fomular <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ IBV_TimeDependent + sex +  symptoms  + agebin
-# Covid model
+# IBV Cox model
 model <- coxph(fomular, cluster = individual, data = IBV_TimeDependent_cov)
-Summary = summary(model)
+
+# Model Summary
+tab_model(model)
+
 # Proportional hazards test: Schofield residual test
 cox.zph(model) # Non-significance represents for valid proportional hazard assumption
-
-# Coefficient table
-resultTable <- cbind(Summary$coefficients, Summary$conf.int[, c('lower .95', 'upper .95')])
-resultTable
 
 
 ```
@@ -996,8 +1000,8 @@ resultTable
 
 
 
-## (4.4) Sensitivity Analysis
-### RV
+## (5) Sensitivity Analysis
+### (5.1) RV
 
 ```{r}
 #######################################################################################################################
@@ -1090,7 +1094,7 @@ Rhinovirus_TimeDependent <- Rhinovirus_TimeDependent[, c("individual","sample", 
 rownames(Rhinovirus_TimeDependent) <- NULL
 table(Rhinovirus_TimeDependent$Rhinovirus_TimeDependent)
 ```
-### CV
+### (5.2) CV
 
 ```{r}
 #######################################################################################################################
@@ -1195,7 +1199,7 @@ table(Covid_TimeDependent$Covid_TimeDependent)
 
 ```
 
-### Cox RV
+### (5.1A) Cox RV
 ```{r}
 
 
@@ -1208,7 +1212,9 @@ Rhinovirus_TimeDependent_cov <- Rhinovirus_TimeDependent %>%
   ))  %>%
     mutate(agebin = factor(agebin, levels = c("17-45", "6-16", "< 5", "46-65", "66+"))) %>%
   filter(sex != "other") %>%
-  mutate(sex = factor(sex, levels =c("female", "male")))
+  mutate(sex = factor(sex, levels =c("female", "male"))) %>%
+  mutate(symptoms = if_else(symptoms %in% c("none", "{}", "{none}", "{none,none_2}"), "No", 
+                            if_else(is.na(symptoms), NA_character_, "Yes")))
 
 
 
@@ -1224,7 +1230,7 @@ cox.zph(model)
 
 ```
 
-### Cox CV
+### (5.2A) Cox CV
 
 ```{r}
 
@@ -1237,7 +1243,9 @@ Covid_TimeDependent_cov <- Covid_TimeDependent %>%
   )) %>%
     mutate(agebin = factor(agebin, levels = c("17-45", "< 5", "46-65", "6-16", "66+"))) %>%
   filter(sex != "other") %>%
-  mutate(sex = factor(sex, levels =c("female", "male"))) 
+  mutate(sex = factor(sex, levels =c("female", "male")))  %>%
+  mutate(symptoms = if_else(symptoms %in% c("none", "{}", "{none}", "{none,none_2}"), "No", 
+                            if_else(is.na(symptoms), NA_character_, "Yes")))
   
 table(Covid_TimeDependent_cov$Covid_TimeDependent)
 
@@ -1261,7 +1269,7 @@ range(Rhinovirus_TimeDependent_cov$enrollment_date)
 ```
 
 
-## (5). Baseline hazard
+## (6). Baseline hazard
 ```{r, warning=F, message=F}
 # Obtain cumulative baseline hazard 
 baselineHazard <- coxph(Surv(start_adjusted, stop_adjusted, present_cv_n) ~ present_rv_n, cluster = individual, data = DtAdjusted)
@@ -1284,10 +1292,6 @@ n_timepoint <- 10
 for (i in 2:n_timepoint) {
   Breaks[i] <- Breaks[(i - 1)] + 90    
 }
-
-
-
-# Calculating incidence rate
 
 
 # Visualize smooth baseline hazard function with cubic spline
@@ -1315,7 +1319,7 @@ p
 
 ```
 
-# Kaplan M curves showing non-proportional hazard
+### (6.1) Kaplan M curves showing non-proportional hazard
 
 ```{r}
 
@@ -1390,9 +1394,9 @@ plot_rv/plot_covid
 
 
 
-## (6). Incidence Plot
+## (7). Incidence Plot
 
-### Func inc Rate
+### (7.1) Func inc Rate
 ```{r}
 
 ## Incidence rate by months
@@ -1453,7 +1457,7 @@ Incidence.Calculator <- function(dataset){
 
 ```
 
-### Incidence plot
+### (7.2) Incidence plot
 ```{r}
 
 table(DtAdjusted$present_adv_n)
@@ -1595,7 +1599,7 @@ p
 
 
 
-## (7) CT value subsequent to infection analysis
+## (8) CT value subsequent to infection analysis
 
 ```{r}
 # Get subsequent positive covid tests

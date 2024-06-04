@@ -4,6 +4,7 @@ output: pdf_document
 date: "2024-01-30"
 ---
 
+# Libraries
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(dplyr)
@@ -20,21 +21,20 @@ library(smplot2)
 library(gtsummary)
 library(flextable)
 library("npreg")
-#install.packages("Matrix", repos="http://R-Forge.R-project.org")
-
-#library(survival)
+library(survival)
 library("missRanger")
 library(ggsignif)
 library(geepack)
-install.packages("nlme",lib=.libPaths()[2])
 library(Matrix)
-install.packages(c("Matrix", "MatrixModels", "mvtnorm"), type = "binary")
-
 library(lme4)
 library(optimx)
 library(lmerTest)
 library(hrbrthemes)
 library(ggpubr)
+library(splines)
+library(sjPlot)
+library(patchwork)
+library(survminer)
 ```
 
 
@@ -63,9 +63,9 @@ full_encounter_sample = full_encounter_sample %>%
   #filter(complete.cases(individual)) %>%
   na.omit("individual") %>%
   #Refactor symptoms columns
-   mutate(symptoms = if_else(symptoms %in% c("none", "{}", "{none}", "{none,none_2}"), "No", 
-                            if_else(is.na(symptoms), NA_character_, "Yes")))  %>%
-  dplyr::select(individual, organism, present, sex, agebin, date, site, symptoms, sample, ct) 
+  # mutate(symptoms = if_else(symptoms %in% c("none", "{}", "{none}", "{none,none_2}"), "No", 
+   #                         if_else(is.na(symptoms), NA_character_, "Yes")))  %>%
+  dplyr::select(individual, organism, present, sex, agebin, date,device, site, symptoms, sample, ct) 
 
 range(full_encounter_sample$date)
 
@@ -79,20 +79,18 @@ vacc_data = read.csv("SCAN_vacc_data.csv")
 table(vacc_data$vaccine_status)
 
 
-names(full_encounter_sample_vacc)
 ```
 
-# Figure 1
+# Figure 1: proportion circulating
 ```{r}
-# Filter the dataset for the desired organisms
-
-filtered_data <- full_encounter_sample
 
 # Summarize data to get frequency of presence for each organism by date
-summary_data <- filtered_data %>%
+summary_data <- full_encounter_sample %>%
   group_by(date, organism) %>%
-  summarise(n = sum(present)) %>%
-  mutate(percentage = n / sum(n))
+  summarise(n = sum(present),
+            total_count = n()) %>%
+  mutate(percentage = n / sum(n),
+         positive_percentage = n / total_count)
 
 summary_data$organism <- gsub("_", "-", summary_data$organism)
 
@@ -138,7 +136,38 @@ prev_plot = ggplot(summary_data, aes(x = date, y = percentage, fill = factor(org
   scale_y_percent(scale = 100, limits = c(0,1))
 
 
+# Make another figure for absolute counts
+# Create a plot to show the proportion of positive samples
+positive_plot <- ggplot(summary_data, aes(x = date, y = positive_percentage, fill = factor(organism))) +
+  geom_area(stat = "smooth", method = "loess",
+            alpha = 0.9, span = 1/4) +
+  
+  scale_fill_manual(name = "Organism",  # Adjust the legend name
+                    values = c(
+                      "Rhinovirus" = "#355070",
+                      "SARS-CoV-2" = "#F94144", 
+                      "RSV A" = "#F8961E",  
+                      "RSV B" = "#F9C74F",  
+                      "Influenza A H1N1" = "#90BE6D",
+                      "Influenza A H3N2" = "#577590",
+                      "Adenovirus" = "#6d597a",
+                      "Influenza B" = "#4D908E"
+                    )) +
+  sm_corr_theme() +
+  labs(
+    x = "Date",
+    y = "Proportion of Positive Samples",
+    #title = "Proportion of Positive Samples Over Time"
+  ) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1))
+
+
+
+
+
 ggsave("prev_plot_sfs.png", prev_plot, width = 12, height = 6, dpi = 300,scale = 0.75, bg = 'white')
+
+ggsave("prop_pos_plot_sfs.png", positive_plot, width = 12, height = 6, dpi = 300,scale = 0.75, bg = 'white')
 
 ```
 
@@ -146,7 +175,7 @@ ggsave("prev_plot_sfs.png", prev_plot, width = 12, height = 6, dpi = 300,scale =
 
 ```{r}
 
-# Combine all data frames
+# Specify pathogens to be investigated
 spec_pathogen_data <- full_encounter_sample %>%
   filter(organism %in% c("Rhinovirus", "SARS_CoV_2", "RSV.A", "RSV.B", "IAV..H1N1", "Adenovirus","IAV..H3N2", "IBV")) %>%
   mutate(organism = case_when(
@@ -157,7 +186,7 @@ spec_pathogen_data <- full_encounter_sample %>%
     TRUE ~ organism
   )) %>%
   group_by(individual, organism, date) %>%
-  dplyr::select(individual, organism, present, ct, sex, agebin, date, site, symptoms, sample) %>%
+  dplyr::select(individual, organism, present, ct, sex, agebin, date,device, site, symptoms, sample) %>%
   arrange(organism, desc(present)) %>%
   slice(1) %>%
   ungroup() 
@@ -170,10 +199,11 @@ spec_pathogen_data %>%
 
 
 
+# Pivot wider
 encounter_rv_cv_pairs <- spec_pathogen_data %>%
 
   filter(as.numeric(difftime(lead(date), date, units = "days")) < 365) %>%
-  #Pivot the organism column wider to seperate organisms
+  #Pivot the organism column wider to separate organisms
   pivot_wider(id_cols = c(individual, date, sex, agebin, symptoms, sample),
               names_from = organism, values_from = present, names_prefix = "present_"
               #,values_fill = FALSE
@@ -182,7 +212,7 @@ encounter_rv_cv_pairs <- spec_pathogen_data %>%
   filter(n() > 1) 
 
 
-# Convert into binar y 0 and 1
+# Convert into binary 0 and 1
 encounter_rv_cv_pairs_conf = encounter_rv_cv_pairs %>%
   mutate(present_rv_n = as.integer(as.logical(present_Rhinovirus)),
          present_sars_cov_2_n = as.integer(as.logical(present_SARS_CoV_2)),
@@ -196,7 +226,6 @@ encounter_rv_cv_pairs_conf = encounter_rv_cv_pairs %>%
     "present_iav_n", "present_adv_n", "present_ibv_n"
   ))
 
-length(unique(encounter_rv_cv_pairs_conf$individual))
 
 # adding Ct
 sample_ct_summary <- spec_pathogen_data %>%
@@ -209,14 +238,13 @@ sample_ct_summary <- spec_pathogen_data %>%
   )
 
 
+# Merge ct values data
 encounter_rv_cv_pairs_conf <- left_join(encounter_rv_cv_pairs_conf, sample_ct_summary)
 
 
-encounter_rv_cv_pairs_conf_ct %>%
-  filter(sample == "704ab7e4-9a66-48a6-a057-5b1023d1aae7")
 
-#, ct_Adenovirus, ct_IAV, ct_IBV, ct_RSV,    ct_Rhinovirus, ct_SARS_CoV_2 
-# Co-infections
+
+# If Excluding Co-infections
 encounter_rv_cv_pairs<- encounter_rv_cv_pairs %>%
   filter(!(present_SARS_CoV_2 & present_Adenovirus) &
            !(present_SARS_CoV_2 & present_RSV) &
@@ -303,7 +331,7 @@ propmiss(encounter_rv_cv_pairs_conf)
 ```
 
 
-# MissRanger: Imputing missing data
+# MissRanger: Imputing missing data if any
 
 ```{r}
 # Exclude date, ct value from imputation
@@ -326,7 +354,6 @@ encounter_rv_cv_pairs_conf %>%
 # (1) Adjusting Start and Stop dates for Survival
 ```{r}
 
-#
 Minimum_Date <- c(summary(encounter_rv_cv_pairs_conf$date)['Min.'])
 Minimum_Date_Calendar <- as.Date(Minimum_Date, origin = '1970-1-1')
 
@@ -334,7 +361,6 @@ Minimum_Date_Calendar <- as.Date(Minimum_Date, origin = '1970-1-1')
 encounter_rv_cv_pairs_conf = encounter_rv_cv_pairs_conf %>%
   group_by(individual) %>%
   mutate(enrollment_date = min(date)) %>%
-  ungroup() %>%
   #Only keeping true enrollment date (initial date for each participant)
   filter(enrollment_date != date)
 
@@ -391,7 +417,7 @@ Create.Time.Dependent.Dummy <- function(DataFrame, targeted_virus, secondary_vir
   ### Part 1: create correct timepoint framework
   First_Infectioin_Location <- which(DataFrame[, targeted_virus] == 1)[1]
   First_Infectioin_Onset_Day <- DataFrame[First_Infectioin_Location, stop] 
-  #First_Infectioin_Onset_Day + 30, 
+
   Subinterval_Timepoint <- c(First_Infectioin_Onset_Day + 14, First_Infectioin_Onset_Day + 30, First_Infectioin_Onset_Day + 60, First_Infectioin_Onset_Day + 180, First_Infectioin_Onset_Day + 365)
   # Remove existed sub-interval timepoint
   Remove.Existed <- Subinterval_Timepoint %in% DataFrame[, stop]
@@ -437,7 +463,7 @@ Create.Time.Dependent.Dummy <- function(DataFrame, targeted_virus, secondary_vir
     }
     # When targeted virus infected
     if(i == First_Infectioin_Location){
-      DataFrame[i, Dummy.Variable] <- 'No'
+      DataFrame[i, Dummy.Variable] <- 'Day <= 14'
     }
     # Since targeted virus infection
     if(i > First_Infectioin_Location){
@@ -476,7 +502,7 @@ Create.Time.Dependent.Dummy_Not_Dual <- function(DataFrame, targeted_virus, stop
     }
     # When targeted virus infected
     if(i == First_Infectioin_Location){
-      DataFrame[i, Dummy.Variable] <- 'No'
+      DataFrame[i, Dummy.Variable] <- 'Day <= 14'
     }
     # Since targeted virus infection
     if(i > First_Infectioin_Location){
@@ -493,7 +519,7 @@ Create.Time.Dependent.Dummy_Not_Dual <- function(DataFrame, targeted_virus, stop
       if(Gap > 60 & Gap <= 180){
         DataFrame[i,Dummy.Variable] <- '60 < Day <= 180'
       }
-      if(Gap > 180 & Gap <= 365){
+      if(Gap > 180 & Gap <= 360){
         DataFrame[i,Dummy.Variable] <- '180 < Day <= 365'
       }
       if(Gap > 365){
@@ -581,7 +607,7 @@ Rhinovirus_TimeDependent <- rbind(DtRhinovirus1, DtRhinovirus2)
 
 Rhinovirus_TimeDependent$Rhinovirus_TimeDependent <- factor(Rhinovirus_TimeDependent$Rhinovirus_TimeDependent,
                                                            #,'30 < Day <= 60'
-                                                            levels = c("No", 'Day <= 14','14 < Day <= 30', '30 < Day <= 60' ,"60 < Day <= 180", "180 < Day <= 365"))
+                                                            levels = c("No", 'Day <= 14','14 < Day <= 30', '30 < Day <= 60' ,"60 < Day <= 180", "180 < Day <= 365", "Day > 365"))
 Rhinovirus_TimeDependent <- Rhinovirus_TimeDependent[, c("individual","sample", "enrollment_date", "followupDate", 
                                                         "start_adjusted", "stop_adjusted",'gap_adjusted', "present_rv_n",
                                                         "Secondary_Group","date", "Rhinovirus_TimeDependent")]
@@ -668,7 +694,7 @@ Covid_TimeDependent %>%
 
 Covid_TimeDependent$Covid_TimeDependent <- factor(Covid_TimeDependent$Covid_TimeDependent, 
                                                   #'30 < Day <= 60',
-                                                            levels = c("No", 'Day <= 14','14 < Day <= 30', '30 < Day <= 60' ,"60 < Day <= 180", "180 < Day <= 365"))
+                                                            levels = c("No", 'Day <= 14','14 < Day <= 30', '30 < Day <= 60' ,"60 < Day <= 180",  "180 < Day <= 300", "300 < Day <= 420", "Day > 420"))
 Covid_TimeDependent <- Covid_TimeDependent[, c("individual","sample", "enrollment_date", "followupDate", 
                                                         "start_adjusted", "gap_adjusted","stop_adjusted", "present_sars_cov_2_n", 
                                                         "Secondary_Group", "Covid_TimeDependent")]
@@ -1027,13 +1053,14 @@ Rhinovirus_TimeDependent_cov <- Rhinovirus_TimeDependent %>%
     mutate(agebin = factor(agebin, levels = c("17-45", "6-16", "< 5", "46-65", "66+"))) %>%
   filter(sex != "other") %>%
   mutate(sex = factor(sex, levels =c("female", "male"))) %>%
-  #mutate(vaccine_status = factor(vaccine_status, levels =c("not_vaccinated", "partially_vaccinated", "fully_vaccinated","boosted"))) %>%
-  group_by(individual)
+  mutate(date = as.Date(date)) %>%
+  mutate(symptoms = if_else(symptoms %in% c("none", "{}", "{none}", "{none,none_2}"), "No", 
+                            if_else(is.na(symptoms), NA_character_, "Yes")))
 
 
   
-length(unique(Rhinovirus_TimeDependent_cov$sample))
-table(Rhinovirus_TimeDependent_cov$site)
+length(unique(Rhinovirus_TimeDependent_cov$Rhinovirus_TimeDependent))
+table(Rhinovirus_TimeDependent_cov$Rhinovirus_TimeDependent)
 
 # Change reference levels for covariates
 
@@ -1044,7 +1071,7 @@ fomular_unadj <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ Rhinovir
 fomular <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ Rhinovirus_TimeDependent + sex+ symptoms+agebin
 # Rhinovirus model
 model <- coxph(fomular,cluster = individual, data = Rhinovirus_TimeDependent_cov)
-Summary = summary(model)
+tab_model(model)
 
 # Proportional hazards test: Schofield residual test
 cox.zph(model) # Non-significance represents for valid proportional hazard assumption
@@ -1053,7 +1080,28 @@ resultTable <- cbind(Summary$coefficients, Summary$conf.int[, c('lower .95', 'up
 resultTable
 
 
+Rhinovirus_TimeDependent_cov %>%
+  ggplot(aes(x = Rhinovirus_TimeDependent, y = Secondary_Group, group = Rhinovirus_TimeDependent)) +
+  geom_point()
 
+
+# Step 1: Calculate the proportions
+proportion_data <- Rhinovirus_TimeDependent_cov %>%
+  #filter(Rhinovirus_TimeDependent != "No") %>%
+  filter(present_rv_n == 1) %>%
+  group_by(Rhinovirus_TimeDependent, present_rv_n, Secondary_Group) %>%
+  summarise(count = n()) %>%
+  #ungroup() %>%
+  #group_by(Rhinovirus_TimeDependent, present_rv_n) %>%
+  mutate(total = sum(count),
+         proportion = count / total)
+
+# Step 2: Plot the data
+ggplot(proportion_data, aes(x = Rhinovirus_TimeDependent, y = proportion, color = as.factor(Secondary_Group), group = Secondary_Group)) +
+  geom_line() +
+  geom_point() +
+  sm_corr_theme()
+  #labs(x = "Rhinovirus Time Dependent", y = "Proportion of Secondary Group", color = "Presence of RV") +
 ```
 
 
@@ -1063,14 +1111,16 @@ resultTable
 
 Covid_TimeDependent_cov <- Covid_TimeDependent %>%
   left_join(DtAdjusted %>% 
-              dplyr::select(individual,sample, agebin, sex,ct_Adenovirus, ct_IAV,ct_IBV, ct_RSV, ct_Rhinovirus, ct_SARS_CoV_2, symptoms), by = c("individual","sample")) %>%
+              dplyr::select(individual,sample, agebin, sex,ct_Adenovirus, ct_IAV,ct_IBV, ct_RSV, ct_Rhinovirus, ct_SARS_CoV_2, date, symptoms), by = c("individual","sample")) %>%
   mutate(agebin = case_when(
     agebin %in% c("<1", "1-5") ~ "< 5",
     TRUE ~ as.character(agebin)
   )) %>%
     mutate(agebin = factor(agebin, levels = c("17-45", "< 5", "46-65", "6-16", "66+"))) %>%
   filter(sex != "other") %>%
-  mutate(sex = factor(sex, levels =c("female", "male"))) 
+  mutate(sex = factor(sex, levels =c("female", "male")))  %>%
+  mutate(symptoms = if_else(symptoms %in% c("none", "{}", "{none}", "{none,none_2}"), "No", 
+                            if_else(is.na(symptoms), NA_character_, "Yes")))
   
 table(Covid_TimeDependent_cov$Covid_TimeDependent)
 
@@ -1081,7 +1131,7 @@ fomular_unadj <- Surv(start_adjusted, stop_adjusted, Secondary_Group_cv) ~ Covid
 fomular <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ Covid_TimeDependent + sex + symptoms + agebin 
 # Covid model
 model <- coxph(fomular, cluster = individual, data = Covid_TimeDependent_cov)
-summary(model)
+tab_model(model)
 # Proportional hazards test: Schofield residual test
 cox.zph(model) # Non-significance represents for valid proportional hazard assumption
 
@@ -1108,7 +1158,7 @@ Adenovirus_TimeDependent_cov <- Adenovirus_TimeDependent %>%
   filter(sex != "other") %>%
   mutate(sex = factor(sex, levels =c("female", "male"))) 
   
-table(Adenovirus_TimeDependent_cov$agebin)
+table(Adenovirus_TimeDependent_cov$Adenovirus_TimeDependent)
 
 
 
@@ -1116,7 +1166,7 @@ table(Adenovirus_TimeDependent_cov$agebin)
 fomular <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ Adenovirus_TimeDependent + sex +  symptoms + agebin
 # Covid model
 model <- coxph(fomular, cluster = individual, data = Adenovirus_TimeDependent_cov)
-summary(model)
+tab_model(model)
 # Proportional hazards test: Schofield residual test
 cox.zph(model) # Non-significance represents for valid proportional hazard assumption
 
@@ -1142,16 +1192,16 @@ RSV_TimeDependent_cov <- RSV_TimeDependent %>%
   filter(sex != "other") %>%
   mutate(sex = factor(sex, levels =c("female", "male")))
   
-table(Adenovirus_TimeDependent_cov$agebin)
+table(RSV_TimeDependent_cov$RSV_TimeDependent)
 
 # Covid primary unadjusted
-fomular_unadj <- Surv(start_adjusted, stop_adjusted, Secondary_Group_cv) ~ Covid_TimeDependent
+fomular_unadj <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ RSV_TimeDependent
 
 # Formula Covid adjusted
 fomular <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ RSV_TimeDependent + sex +  symptoms  + agebin
 # Covid model
 model <- coxph(fomular, cluster = individual, data = RSV_TimeDependent_cov)
-Summary = summary(model)
+tab_model(model)
 # Proportional hazards test: Schofield residual test
 cox.zph(model) # Non-significance represents for valid proportional hazard assumption
 
@@ -1179,16 +1229,16 @@ IAV_TimeDependent_cov <- IAV_TimeDependent %>%
   filter(sex != "other") %>%
   mutate(sex = factor(sex, levels =c("female", "male")))
   
-table(Adenovirus_TimeDependent_cov$agebin)
+table(IAV_TimeDependent_cov$IAV_TimeDependent)
 
-# Covid primary unadjusted
-fomular_unadj <- Surv(start_adjusted, stop_adjusted, Secondary_Group_cv) ~ Covid_TimeDependent
+# IAV primary unadjusted
+fomular_unadj <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ IAV_TimeDependent
 
 # Formula Covid adjusted
 fomular <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ IAV_TimeDependent + sex +  symptoms  + agebin
 # Covid model
 model <- coxph(fomular, cluster = individual, data = IAV_TimeDependent_cov)
-Summary = summary(model)
+tab_model(model)
 # Proportional hazards test: Schofield residual test
 cox.zph(model) # Non-significance represents for valid proportional hazard assumption
 
@@ -1355,7 +1405,7 @@ Covid$'Covid_TimeDependent' <- 'No'
 
 # Step 1: Removing records for patients with targeted primary viral infections within the first 90 days
 Covid_TimeDependent_step1 <- Covid %>%
-  filter(present_sars_cov_2_n == 1 & stop_adjusted - start_adjusted <= 30) %>%
+  filter(present_sars_cov_2_n == 1 & stop_adjusted - start_adjusted <= 14) %>%
   dplyr::select(individual) %>%
   distinct()
 
@@ -1365,7 +1415,7 @@ Covid_TimeDependent_step1 <- anti_join(Covid, Covid_TimeDependent_step1, by = "i
 
 # Filter rows that responed No (0) and were within the first 30 days
 Covid_TimeDependent_step2 <- Covid_TimeDependent_step1 %>%
-  filter(present_sars_cov_2_n == 0 & stop_adjusted - start_adjusted < 30)
+  filter(present_sars_cov_2_n == 0 & stop_adjusted - start_adjusted < 14)
 
 # Take them out of the step 1 data
 Covid_TimeDependent_step3 = anti_join(Covid, Covid_TimeDependent_step2)
@@ -1555,19 +1605,22 @@ ggplot(Baseline.Hazard, aes(x = Calendar.Date, y = h)) +
 p  
 
 
+```
 
+# Kaplan M curves showing non-proportional hazard
 
+```{r}
 
 
 # Formula Rhinovirus adjusted
-fomular <- Surv(start_adjusted, stop_adjusted, Secondary_Group_cv) ~ present_cv_n + sex+ agebin + symptoms
+fomular <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ present_sars_cov_2_n + sex+ agebin + symptoms
 # Rhinovirus model
 model <- coxph(fomular,cluster = individual, data = Covid_TimeDependent_cov)
 summary(model)
 
 
 # Define survival function
-survival_function <- function(data_x, strata_x) {
+survival_function_Cov <- function(data_x, strata_x) {
   # Create survival object
   data_x$s <- Surv(data_x$start_adjusted, data_x$stop_adjusted, data_x$Secondary_Group)
   # Create survival formula
@@ -1577,13 +1630,54 @@ survival_function <- function(data_x, strata_x) {
   # Update formula in the survfit object
   my_survfit$call$formula <- survFormula
   # Plot Kaplan-Meier curve
-  ggsurvplot(my_survfit, data = data_x)
+  ggsurvplot(my_survfit, data = data_x,            # Add p-value
+             conf.int = TRUE,           # Add confidence intervals
+             risk.table = TRUE,         # Add risk table
+             tables.theme = theme_cleantable(),  # Clean theme for tables
+             palette = "jco",           # Change color palette
+             legend.labs = c("Negative", "Positive"),  # Change legend labels
+             legend.title = "Covid Status",      # Change legend title
+             xlab = "Time (days)",      # Change x-axis label
+             ylab = "Survival Probability",            # Change y-axis label
+             title = "Survival Curves of Secondary Respiratory Infection by SARS-CoV-2 Status",  # Change plot title
+             ggtheme = theme_bw()      # Change plot theme
+  )
 }
 
+# Define survival function
+survival_function_rv<- function(data_x, strata_x) {
+  # Create survival object
+  data_x$s <- Surv(data_x$start_adjusted, data_x$stop_adjusted, data_x$Secondary_Group)
+  # Create survival formula
+  survFormula <- as.formula(paste("s ~", strata_x))
+  # Fit survival model
+  my_survfit <- survfit(survFormula, data = data_x)
+  # Update formula in the survfit object
+  my_survfit$call$formula <- survFormula
+  # Plot Kaplan-Meier curve
+  ggsurvplot(my_survfit, data = data_x,            # Add p-value
+             conf.int = TRUE,           # Add confidence intervals
+             risk.table = TRUE,         # Add risk table
+             tables.theme = theme_cleantable(),  # Clean theme for tables
+             palette = "jco",           # Change color palette
+             legend.labs = c("Negative", "Positive"),  # Change legend labels
+             legend.title = "RV Status",      # Change legend title
+             xlab = "Time (days)",      # Change x-axis label
+             ylab = "Survival Probability",            # Change y-axis label
+             title = "Survival Curves of Secondary Respiratory Infection by Rhinovirus Status",  # Change plot title
+             ggtheme = theme_bw()      # Change plot theme
+  )
+}
+
+
+
 # Call survival function with appropriate arguments
-survival_function(data_x = Rhinovirus_TimeDependent, strata_x = "present_rv_n")
+plot_covid = survival_function_Cov(data_x = Covid_TimeDependent_cov, strata_x = "present_sars_cov_2_n")
+
+plot_rv = survival_function_rv(data_x = Rhinovirus_TimeDependent_cov, strata_x = "present_rv_n")
 
 
+plot_rv/plot_covid
 ```
 
 
@@ -1822,11 +1916,15 @@ positive_secondary_samples_cv <- Rhinovirus_TimeDependent_cov %>%
   dplyr::select( sample, individual, Rhinovirus_TimeDependent, Secondary_Group, symptoms, agebin, ct_SARS_CoV_2, ct_Adenovirus, ct_IAV,ct_IBV, ct_RSV)
 
 
+Covid_TimeDependent_cov %>%
+  complete.cases(ct_SARS_CoV_2)
+Covid_TimeDependent_cov_t = Covid_TimeDependent_cov[!is.na(Covid_TimeDependent_cov$ct_Rhinovirus), ]
+
 # adjusted and unadjusted model
-model1 = geeglm(ct_SARS_CoV_2 ~ Rhinovirus_TimeDependent + symptoms+ agebin , data = Rhinovirus_TimeDependent_cov , corstr = "exchangeable", id = individual, family = gaussian())
+model1 = geeglm(ct_SARS_CoV_2 ~ Rhinovirus_TimeDependent + symptoms+ agebin , data = Rhinovirus_TimeDependent_cov , corstr = "ar1", id = individual, family = gaussian())
 
 
-summary(model1)
+tab_model(model1)
 secondary_post_with_ct_cv <- positive_secondary_samples_cv
 
 # Get subsequent positive covid tests
@@ -1834,27 +1932,27 @@ positive_secondary_samples_rv <- Covid_TimeDependent_cov %>%
   filter(Secondary_Group == 1) %>%
   dplyr::select(sample,individual, Covid_TimeDependent, Secondary_Group, symptoms, agebin, ct_Rhinovirus, ct_Adenovirus, ct_IAV,ct_IBV, ct_RSV, sex)
 
-positive_secondary_samples_rv$Covid_TimeDependent <- factor(positive_secondary_samples_rv$Covid_TimeDependent, levels = c("No", "Day <= 30", "30 < Day <= 60", "60 < Day <= 180"))
+Covid_TimeDependent_cov_t = Covid_TimeDependent_cov %>%
+  filter(sample != "3b191002-a783-457e-980e-a8df2db0f255")
 
-model2 = geeglm(ct_SARS_CoV_2 ~ Covid_TimeDependent + symptoms, data = positive_secondary_samples_rv, corstr = "exchangeable", id = individual, family = gaussian())
+model2 = geeglm(ct_Rhinovirus ~ Covid_TimeDependent + symptoms + sex+ agebin+ ns(date, df = 3), data = Covid_TimeDependent_cov, corstr = "ar1", id = individual, family = gaussian())
 
-summary(model2)
+tab_model(model2)
 
 # Mixed Effects models
+# RV CT
+mix_model_rv <- lmer(ct_Rhinovirus ~ Covid_TimeDependent + symptoms +sex+agebin+ ns(date, df = 8)+(1 | individual), REML = T, lmerControl(optimizer ='optimx', optCtrl=list(method='bobyqa')), data = Covid_TimeDependent_cov)
+# Covid ct
+mix_model_cv <- lmer(ct_SARS_CoV_2 ~ Rhinovirus_TimeDependent +ns(date, df = 8)+symptoms + agebin+sex+ (1 | individual) , REML = T, lmerControl(optimizer = "optimx", optCtrl=list(method='bobyqa')), data = Rhinovirus_TimeDependent_cov)
 
-mix_model_rv <- lmer(ct_Rhinovirus ~ Covid_TimeDependent + symptoms + sex+ agebin +(1 | individual), REML = T, lmerControl(optimizer ='optimx', optCtrl=list(method='bobyqa')), data = Covid_TimeDependent_cov)
 
 
-
-lmer_ctrl <- lmerControl(optimizer = "optimx", 
-                         optCtrl = list(method = "bobyqa"))
-
-mix_model_cv <- lmer(ct_SARS_CoV_2 ~ Rhinovirus_TimeDependent +enrollment_date+symptoms + agebin+sex+ (1 | individual) , REML = T, lmerControl(optimizer = "optimx", optCtrl=list(method='bobyqa')), data = Rhinovirus_TimeDependent_cov)
-
-summary(mix_model_rv)
-summary()
-tab_model(mix_model_cv)
 tab_model(mix_model_rv)
+tab_model(model1)
+tab_model(mix_model_cv)
+tab_model(model2)
+
+
 ```
 
 
@@ -1871,7 +1969,7 @@ ct_names <- c("ct_Rhinovirus", "ct_SARS_CoV_2", "ct_RSV", "ct_Adenovirus", "ct_I
 ct_cv_full <- DtAdjusted %>%
   ggplot(mapping= aes(x = symptoms, y = ct_SARS_CoV_2, fill = symptoms)) +
   sm_raincloud() +
-  labs(x = "Time", y = "Cycle Threshold (Ct)", title = "CV Ct based on Symptoms") +
+  labs(x = "Symptoms", y = "Cycle Threshold (Ct)", title = "CV Ct based on Symptoms") +
   sm_corr_theme() +
   scale_fill_manual(values = sm_color('blue','orange'))
 
@@ -1879,7 +1977,7 @@ ct_cv_full <- DtAdjusted %>%
 ct_rv_full <- DtAdjusted %>%
   ggplot(mapping= aes(x = symptoms, y = ct_Rhinovirus, fill = symptoms)) +
   sm_raincloud() +
-  labs(x = "Time", y = "Cycle Threshold (Ct)", title = "RV Ct based on Symptoms") +
+  labs(x = "Symptoms", y = "Cycle Threshold (Ct)", title = "RV Ct based on Symptoms") +
   sm_corr_theme() +
   scale_fill_manual(values = sm_color('blue','orange'))
 
@@ -1887,7 +1985,7 @@ ct_rv_full <- DtAdjusted %>%
 ct_rsv_full <- DtAdjusted %>%
   ggplot(mapping= aes(x = symptoms, y = ct_RSV, fill = symptoms)) +
   sm_raincloud() +
-  labs(x = "Time", y = "Cycle Threshold (Ct)", title = "RSV Ct based on Symptoms") +
+  labs(x = "Symptoms", y = "Cycle Threshold (Ct)", title = "RSV Ct based on Symptoms") +
   sm_corr_theme() +
   scale_fill_manual(values = sm_color('blue','orange'))
 
@@ -1895,7 +1993,7 @@ ct_rsv_full <- DtAdjusted %>%
 ct_adeno_full <- DtAdjusted %>%
   ggplot(mapping= aes(x = symptoms, y = ct_Adenovirus, fill = symptoms)) +
   sm_raincloud() +
-  labs(x = "Time", y = "Cycle Threshold (Ct)", title = "Adenovirus Ct based on Symptoms") +
+  labs(x = "Symptoms", y = "Cycle Threshold (Ct)", title = "Adenovirus Ct based on Symptoms") +
   sm_corr_theme() +
   scale_fill_manual(values = sm_color('blue','orange'))
 
@@ -1903,7 +2001,7 @@ ct_adeno_full <- DtAdjusted %>%
 ct_iav_full <- DtAdjusted %>%
   ggplot(mapping= aes(x = symptoms, y = ct_IAV, fill = symptoms)) +
   sm_raincloud() +
-  labs(x = "Time", y = "Cycle Threshold (Ct)", title = "IAV Ct based on Symptoms") +
+  labs(x = "Symptoms", y = "Cycle Threshold (Ct)", title = "IAV Ct based on Symptoms") +
   sm_corr_theme() +
   scale_fill_manual(values = sm_color('blue','orange'))
 
@@ -1912,11 +2010,10 @@ ct_ibv_full <- DtAdjusted %>%
   ggplot(mapping= aes(x = symptoms, y = ct_IBV, fill = symptoms)) +
   geom_point()+
   sm_raincloud() +
-  labs(x = "Time", y = "Cycle Threshold (Ct)", title = "IBV Ct based on Symptoms") +
+  labs(x = "Symptoms", y = "Cycle Threshold (Ct)", title = "IBV Ct based on Symptoms") +
   sm_corr_theme() +
   scale_fill_manual(values = sm_color('blue','orange'))
-DtAdjusted %>%
-  select(ct_IBV)
+
 
 
 (ct_cv_full + ct_rv_full) / (ct_rsv_full + ct_adeno_full) + (ct_iav_full)
@@ -1927,20 +2024,21 @@ DtAdjusted %>%
 
 
 # Define the CT names
-encounter_rv_cv_pairs_conf = encounter_rv_cv_pairs_conf %>%
+co_infection_corr = DtAdjusted %>%
     ggplot(aes(x = ct_SARS_CoV_2, y = ct_Rhinovirus)) +
     #ggplot(aes(x = ct_Adenovirus, y = ct_Rhinovirus)) +
     geom_point() +
     sm_statCorr(corr_method = "pearson", size = 1, legends = TRUE, show_text = FALSE) +
     stat_cor(method = "pearson", label.x = 7, label.y = 35, size = 4, show.legend = TRUE, cor.coef.name = "r") +
-    labs(x = paste0(pathogen1, " Ct"), y = paste0(pathogen2, " Ct"), color = "Symptoms") +
-    ggtitle(paste("Co-infection Ct Values for", pathogen1, "and", pathogen2)) +
+  
     scale_color_manual(values = sm_palette(4))
+library(patchwork)
 
 
-ct_fig = (ct_cv_full + ct_rv_full) / co_infection_plot 
 
-ggsave(filename = "ct_fig.png", plot =ct_fig, width = 7, height = 6 )
+ct_fig = (ct_cv_full + ct_rv_full) / (ct_adeno_full + ct_rsv_full)
+
+ggsave(filename = "ct_fig.png", plot =ct_fig, width = 8, height = 6 )
 
 ```
 
@@ -1974,7 +2072,7 @@ Rv_cv_ct= positive_secondary_samples_cv %>%
 # Cv > RV
 
 
-cv_rv_ct = positive_secondary_samples_rv %>%
+Covid_TimeDependent_cov %>%
 
   #filter(present_rv_n == 1) %>%
   #filter(Rhinovirus_TimeDependent != "No") %>%
@@ -2000,32 +2098,10 @@ cv_rv_ct = positive_secondary_samples_rv %>%
 
 
 
-Rv_cv_ct / cv_rv_ct
 
-
-positive_secondary_samples_rv %>%
-  pivot_longer(cols = starts_with("ct_"), names_to = "Virus", values_to = "CT") %>%
-  ggplot(aes(x = as.factor(Covid_TimeDependent), y = CT)) +
-    sm_violin(
-    violin.params = list(fill = "#99CCFF", color = NA,  alpha = 0.5),  # Customize violin appearance
-    point.params = list(alpha = 0.3, color = "#99CCFF", size = 1),  # Customize points appearance
-    errorbar_type = "sd",  # Error bar type
-    points = TRUE,  # Show points
-    borders = FALSE,  # Hide borders
-    legends = FALSE,
-    trim = FALSE
-  ) +  
-  sm_corr_theme() +
-  labs(x = "Time Periods",
-       y = "CT Values",
-       title = "Distribution of CT Values Subsequent to SARS-CoV-2 infection",
-       color = "Virus") +
-  scale_color_manual(values = c(ct_Adenovirus = "red", ct_IAV = "blue", ct_IBV = "green", ct_RSV = "orange", ct_Rhinovirus = "purple"))
-
-
-positive_secondary_samples_cv %>%
+Rhinovirus_TimeDependent_cov %>%
   #filter(!Rhinovirus_TimeDependent== "Day <= 14") %>%
-  pivot_longer(cols = starts_with("ct_"), names_to = "Virus", values_to = "CT") %>%
+  #pivot_longer(cols = starts_with("ct_"), names_to = "Virus", values_to = "CT") %>%
   ggplot(aes(x = as.factor(Rhinovirus_TimeDependent), y = ct_SARS_CoV_2)) +
     sm_violin(
     violin.params = list(fill = "#99CCFF", color = NA,  alpha = 0.75),  # Customize violin appearance
@@ -2038,8 +2114,8 @@ positive_secondary_samples_cv %>%
   ) +  
   sm_corr_theme() +
   labs(x = "Time Periods",
-       y = "CT Values",
-       title = "Distribution of CT Values Subsequent to SARS-CoV-2 infection",
+       y = "CT Values (Covid)",
+       title = "Distribution of CT Values Subsequent to RV infection",
        color = "Virus") +
   scale_color_manual(values = c(ct_Adenovirus = "red", ct_IAV = "blue", ct_IBV = "green", ct_RSV = "orange", ct_SARS_CoV_2 = "purple"))
 
@@ -2075,12 +2151,9 @@ table_demog <- filtered_data %>%
     Adenovirus_N = sum(present_adv_n > 0),
     Influenza_A_N = sum(present_iav_n > 0),
     Influenza_B_N = sum(present_ibv_n > 0),
-    Co_Detection = sum((present_rv_n == 1 & present_sars_cov_2_n == 1) | (present_rv_n == 1 & present_rsv_n == 1) | (present_rv_n == 1 & present_adv_n == 1) | (present_rv_n == 1 & present_iav_n == 1) | (present_rv_n == 1 & present_ibv_n == 1) | 
-                       (present_sars_cov_2_n == 1 & present_rsv_n == 1) | (present_sars_cov_2_n == 1 & present_adv_n == 1) | (present_sars_cov_2_n == 1 & present_iav_n == 1) | (present_sars_cov_2_n == 1 & present_ibv_n == 1) | 
-                       (present_rsv_n == 1 & present_adv_n == 1) | (present_rsv_n == 1 & present_iav_n == 1) | (present_rsv_n == 1 & present_ibv_n == 1) | 
-                       (present_adv_n == 1 & present_iav_n == 1) | (present_adv_n == 1 & present_ibv_n == 1) | 
-                       (present_iav_n == 1 & present_ibv_n == 1))
-  )
+        Co_Detection = sum(rowSums(select(., present_rv_n, present_sars_cov_2_n, present_rsv_n, present_adv_n, present_iav_n, present_ibv_n)) > 2))
+
+
 
 # Define the total number of specimens tested
 total_tested <- table_demog$Total_Specimens_Tested
@@ -2168,13 +2241,15 @@ DtAdjusted %>%
 
 
 
-# generate secondary infections for table 2
+# generate function secondary infections for table 2
 
 generate_summary_table <- function(data) {
+  var_name <- sub("_cov$", "", deparse(substitute(data)))
+  
   tbl <- data %>%
     ungroup() %>%
     select(-individual, -sample) %>%
-    tbl_summary(by = "IAV_TimeDependent") %>%
+    tbl_summary(by = var_name) %>%
     modify_header(label = "**Variable**") %>%
     modify_caption("Table 1. Descriptive statistics of Seattle Flu Study SCAN unique individuals stratified by Subsequent presence of SARS-CoV-2 Infection") %>%
     bold_labels() %>%
@@ -2187,7 +2262,7 @@ generate_summary_table <- function(data) {
   return(tbl)
 }
 
-generate_summary_table(IAV_TimeDependent_cov)
+generate_summary_table(Rhinovirus_TimeDependent_cov)
 ```
 
 

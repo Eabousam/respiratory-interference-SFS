@@ -227,7 +227,7 @@ Create.Time.Dependent.Dummy_Not_Dual <- function(DataFrame, targeted_virus, stop
       if(Gap > 60 & Gap <= 180){
         DataFrame[i,Dummy.Variable] <- '60 < Day <= 180'
       }
-      if(Gap > 180 & Gap <= 360){
+      if(Gap > 180 & Gap <= 365){
         DataFrame[i,Dummy.Variable] <- '180 < Day <= 365'
       }
       if(Gap > 365){

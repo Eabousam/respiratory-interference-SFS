@@ -1,12 +1,13 @@
 ---
 title: "Interaction_analysis_clean"
-output: pdf_document
+output: html_document
 date: "2024-01-30"
 ---
 
 # Libraries
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(rmarkdown)
 library(dplyr)
 library(ggplot2)
 library(rigr)
@@ -50,306 +51,13 @@ setwd(repo)
 ```
 
 
-# Read Data
-
-```{R}
-
-#full encounter sample data
-full_encounter_sample = readRDS('model_data.RDS')
-
-full_encounter_sample = full_encounter_sample %>%
-  filter(organism %in% c("Rhinovirus", "SARS_CoV_2", "RSV.A","RSV.B","IAV..H1N1", "IAV..H3N2", "Adenovirus", "IBV")) %>%
-  filter(site %in% c("SCAN")) %>%
-  #filter(complete.cases(individual)) %>%
-  na.omit("individual") %>%
-  #Refactor symptoms columns
-  # mutate(symptoms = if_else(symptoms %in% c("none", "{}", "{none}", "{none,none_2}"), "No", 
-   #                         if_else(is.na(symptoms), NA_character_, "Yes")))  %>%
-  dplyr::select(individual, organism, present, sex, agebin, date,device, site, symptoms, sample, ct) 
-
-range(full_encounter_sample$date)
-
-co_infections <- full_encounter_sample %>%
-  group_by(individual, date) %>%
-  filter(sum(present) > 1) %>%
-  ungroup()
-
-#Clean Vaccination data
-vacc_data = read.csv("SCAN_vacc_data.csv")
-table(vacc_data$vaccine_status)
-
-
-```
-
-# Figure 1: proportion circulating
-```{r}
-
-# Summarize data to get frequency of presence for each organism by date
-summary_data <- full_encounter_sample %>%
-  group_by(date, organism) %>%
-  summarise(n = sum(present),
-            total_count = n()) %>%
-  mutate(percentage = n / sum(n),
-         positive_percentage = n / total_count)
-
-summary_data$organism <- gsub("_", "-", summary_data$organism)
-
-# Replace specific labels with cleaner ones
-summary_data$organism <- gsub("RSV.A", "RSV A", summary_data$organism)
-summary_data$organism <- gsub("RSV.B", "RSV B", summary_data$organism)
-summary_data$organism <- gsub("IAV..H1N1", "Influenza A H1N1", summary_data$organism)
-summary_data$organism <- gsub("IAV..H3N2", "Influenza A H3N2", summary_data$organism)
-summary_data$organism <- gsub("IBV", "Influenza B", summary_data$organism)
-# Plot with modified legend labels and colors
-prev_plot = ggplot(summary_data, aes(x = date, y = percentage, fill = factor(organism))) +
-  geom_area(stat = "smooth", method = "loess", position = "fill", 
-            alpha = 0.9, span = 1/4) +
-  
-  scale_fill_manual(name = "Organism",  # Adjust the legend name
-                    values = c(
-                      "Rhinovirus" = "#355070",
-                      "SARS-CoV-2" = "#F94144", 
-                      "RSV A" = "#F8961E",  
-                      "RSV B" = "#F9C74F",  
-                      "Influenza A H1N1" = "#90BE6D",
-                      "Influenza A H3N2" = "#577590",
-                      "Adenovirus" = "#6d597a",
-                      "Influenza B" = "#4D908E"
-                    )) +
-  scale_color_manual(name = "Organism",  # Adjust the legend name for color
-                    values = c(
-                      "Rhinovirus" = "#355070",
-                      "SARS-CoV-2" = "#F94144", 
-                      "RSV A" = "#F8961E", 
-                      "RSV B" = "#F9C74F",  
-                      "Influenza A H1N1" = "#90BE6D",
-                      "Influenza A H3N2" = "#577590",
-                      "Adenovirus" = "#6d597a",
-                      "Influenza B" = "#4D908E"
-                    )) +
-  sm_corr_theme() +
-  labs(
-    x = "Date",
-    y = "Prevalence",
-    #title = "Prevalence of Respiratory Pathogens Over Time from Seattle SCAN SFS data"
-  )+
-  scale_y_percent(scale = 100, limits = c(0,1))
-
-
-# Make another figure for absolute counts
-# Create a plot to show the proportion of positive samples
-positive_plot <- ggplot(summary_data, aes(x = date, y = positive_percentage, fill = factor(organism))) +
-  geom_area(stat = "smooth", method = "loess",
-            alpha = 0.9, span = 1/4) +
-  
-  scale_fill_manual(name = "Organism",  # Adjust the legend name
-                    values = c(
-                      "Rhinovirus" = "#355070",
-                      "SARS-CoV-2" = "#F94144", 
-                      "RSV A" = "#F8961E",  
-                      "RSV B" = "#F9C74F",  
-                      "Influenza A H1N1" = "#90BE6D",
-                      "Influenza A H3N2" = "#577590",
-                      "Adenovirus" = "#6d597a",
-                      "Influenza B" = "#4D908E"
-                    )) +
-  sm_corr_theme() +
-  labs(
-    x = "Date",
-    y = "Proportion of Positive Samples",
-    #title = "Proportion of Positive Samples Over Time"
-  ) +
-  scale_y_continuous(labels = scales::percent, limits = c(0, 1))
-
-
-
-
-
-ggsave("prev_plot_sfs.png", prev_plot, width = 12, height = 6, dpi = 300,scale = 0.75, bg = 'white')
-
-ggsave("prop_pos_plot_sfs.png", positive_plot, width = 12, height = 6, dpi = 300,scale = 0.75, bg = 'white')
-
-```
-
-# Data: prepare multiple encounter data
+# Read prepped data
 
 ```{r}
-
-# Specify pathogens to be investigated
-spec_pathogen_data <- full_encounter_sample %>%
-  filter(organism %in% c("Rhinovirus", "SARS_CoV_2", "RSV.A", "RSV.B", "IAV..H1N1", "Adenovirus","IAV..H3N2", "IBV")) %>%
-  mutate(organism = case_when(
-    organism == "RSV.A" ~ "RSV",
-    organism == "RSV.B" ~ "RSV",
-    organism == "IAV..H1N1" ~ "IAV",
-    organism == "IAV..H3N2" ~ "IAV",
-    TRUE ~ organism
-  )) %>%
-  group_by(individual, organism, date) %>%
-  dplyr::select(individual, organism, present, ct, sex, agebin, date,device, site, symptoms, sample) %>%
-  arrange(organism, desc(present)) %>%
-  slice(1) %>%
-  ungroup() 
-
-#Check co-infections
-spec_pathogen_data %>%
-  group_by(individual, date) %>%
-  filter(sum(present) > 2) %>%
-  ungroup()
-
-
-
-# Pivot wider
-encounter_rv_cv_pairs <- spec_pathogen_data %>%
-
-  filter(as.numeric(difftime(lead(date), date, units = "days")) < 365) %>%
-  #Pivot the organism column wider to separate organisms
-  pivot_wider(id_cols = c(individual, date, sex, agebin, symptoms, sample),
-              names_from = organism, values_from = present, names_prefix = "present_"
-              #,values_fill = FALSE
-              ) %>%
-  group_by(individual) %>%
-  filter(n() > 1) 
-
-
-# Convert into binary 0 and 1
-encounter_rv_cv_pairs_conf = encounter_rv_cv_pairs %>%
-  mutate(present_rv_n = as.integer(as.logical(present_Rhinovirus)),
-         present_sars_cov_2_n = as.integer(as.logical(present_SARS_CoV_2)),
-         present_rsv_n = as.integer(as.logical(present_RSV)),
-         present_adv_n = as.integer(as.logical(present_Adenovirus)),
-         present_iav_n = as.integer(as.logical(present_IAV)),
-         present_ibv_n = as.integer(as.logical(present_IBV))) %>%
-  dplyr::select(individual, date, present_rv_n, present_sars_cov_2_n, present_rsv_n, present_adv_n, present_iav_n, present_ibv_n,sex, agebin, symptoms, sample)%>%
-   na.omit(c(
-    "present_rv_n", "present_sars_cov_2_n", "present_rsv_n", 
-    "present_iav_n", "present_adv_n", "present_ibv_n"
-  ))
-
-
-# adding Ct
-sample_ct_summary <- spec_pathogen_data %>%
-  pivot_wider(
-    id_cols = c(individual, date, symptoms, sample),
-    names_from = organism,
-    values_from =  ct,
-    names_prefix = c("ct_"),
-    values_fill = list(ct = NA)
-  )
-
-
-# Merge ct values data
-encounter_rv_cv_pairs_conf <- left_join(encounter_rv_cv_pairs_conf, sample_ct_summary)
-
-
-
-
-# If Excluding Co-infections
-encounter_rv_cv_pairs<- encounter_rv_cv_pairs %>%
-  filter(!(present_SARS_CoV_2 & present_Adenovirus) &
-           !(present_SARS_CoV_2 & present_RSV) &
-           !(present_SARS_CoV_2 & present_IAV) &
-           !(present_SARS_CoV_2 & present_IBV) &
-           !(present_SARS_CoV_2 & present_Rhinovirus) &
-           !(present_Adenovirus & present_RSV) &
-           !(present_Adenovirus & present_IAV) &
-           !(present_Adenovirus & present_IBV) &
-           !(present_Adenovirus & present_Rhinovirus) &
-           !(present_RSV & present_IAV) &
-           !(present_RSV & present_IBV) &
-           !(present_RSV & present_Rhinovirus) &
-           !(present_IAV & present_IBV) &
-           !(present_IAV & present_Rhinovirus) &
-           !(present_IBV & present_Rhinovirus) &
-           !(present_SARS_CoV_2 & present_Adenovirus & present_RSV) &
-           !(present_SARS_CoV_2 & present_Adenovirus & present_IAV) &
-           !(present_SARS_CoV_2 & present_Adenovirus & present_IBV) &
-           !(present_SARS_CoV_2 & present_Adenovirus & present_Rhinovirus) &
-           !(present_SARS_CoV_2 & present_RSV & present_IAV) &
-           !(present_SARS_CoV_2 & present_RSV & present_IBV) &
-           !(present_SARS_CoV_2 & present_RSV & present_Rhinovirus) &
-           !(present_SARS_CoV_2 & present_IAV & present_IBV) &
-           !(present_SARS_CoV_2 & present_IAV & present_Rhinovirus) &
-           !(present_SARS_CoV_2 & present_IBV & present_Rhinovirus) &
-           !(present_Adenovirus & present_RSV & present_IAV) &
-           !(present_Adenovirus & present_RSV & present_IBV) &
-           !(present_Adenovirus & present_RSV & present_Rhinovirus) &
-           !(present_Adenovirus & present_IAV & present_IBV) &
-           !(present_Adenovirus & present_IAV & present_Rhinovirus) &
-           !(present_Adenovirus & present_IBV & present_Rhinovirus) &
-           !(present_RSV & present_IAV & present_IBV) &
-           !(present_RSV & present_IAV & present_Rhinovirus) &
-           !(present_RSV & present_IBV & present_Rhinovirus) &
-           !(present_IAV & present_IBV & present_Rhinovirus) &
-           !(present_SARS_CoV_2 & present_Adenovirus & present_RSV & present_IAV) &
-           !(present_SARS_CoV_2 & present_Adenovirus & present_RSV & present_IBV) &
-           !(present_SARS_CoV_2 & present_Adenovirus & present_RSV & present_Rhinovirus) &
-           !(present_SARS_CoV_2 & present_Adenovirus & present_IAV & present_IBV) &
-           !(present_SARS_CoV_2 & present_Adenovirus & present_IAV & present_Rhinovirus) &
-           !(present_SARS_CoV_2 & present_Adenovirus & present_IBV & present_Rhinovirus) &
-           !(present_SARS_CoV_2 & present_RSV & present_IAV & present_IBV) &
-           !(present_SARS_CoV_2 & present_RSV & present_IAV & present_Rhinovirus) &
-           !(present_SARS_CoV_2 & present_RSV & present_IBV & present_Rhinovirus) &
-           !(present_SARS_CoV_2 & present_IAV & present_IBV & present_Rhinovirus) &
-           !(present_Adenovirus & present_RSV & present_IAV & present_IBV) &
-           !(present_Adenovirus & present_RSV & present_IAV & present_Rhinovirus) &
-           !(present_Adenovirus & present_RSV & present_IBV & present_Rhinovirus) &
-           !(present_Adenovirus & present_IAV & present_IBV & present_Rhinovirus) &
-           !(present_RSV & present_IAV & present_IBV & present_Rhinovirus))
-
-
+encounter_rv_cv_pairs_conf = readRDS("encounter_data_pairs.rds")
 
 ```
 
-# Evaluate Missingness
-
-```{r}
-
-# Check missingness in data
-
-propmiss <- function(dataframe) {
-  m <- sapply(dataframe, function(x) {
-      data.frame(
-        nmiss=sum(is.na(x)),
-        n=length(x),
-        propmiss=sum(is.na(x))/length(x))
-  })
-  d <- data.frame(t(m))
-  d <- sapply(d, unlist)
-  d <- as.data.frame (d)
-  d$variable <- row.names (d)
-  row.names(d) <- NULL
-  d <- cbind(d[ncol(d)], d[-ncol(d)])
-  return(d[order(d$propmiss),])
-}
-
-# Look at the amount of missingness
-propmiss(encounter_rv_cv_pairs_conf)
-
-
-
-```
-
-
-# MissRanger: Imputing missing data if any
-
-```{r}
-# Exclude date, ct value from imputation
-encounter_rv_cv_pairs_conf_imp = encounter_rv_cv_pairs_conf %>%
-  #-ct_rv,-ct_cv,
-  dplyr::select(-covidshot1date, -covidshot2date, -covidshot3date )
-# Select columns to add
-encounter_rv_cv_pairs_conf_bind = encounter_rv_cv_pairs_conf %>%
-  ungroup() %>%
-  dplyr::select(ct_rv,ct_cv,covidshot1date, covidshot2date, covidshot3date)
-#Run imputation
-encounter_rv_cv_pairs_conf <- missRanger(encounter_rv_cv_pairs_conf_imp)
-names(encounter_rv_cv_pairs_conf)
-encounter_rv_cv_pairs_conf = cbind(encounter_rv_cv_pairs_conf, encounter_rv_cv_pairs_conf_bind)
-table(encounter_rv_cv_pairs_conf$symptoms)
-encounter_rv_cv_pairs_conf %>%
-  filter(sample == "498e33b6-4e8a-4d0c-829c-7cb13c3ecef0")
-```
 
 # (1) Adjusting Start and Stop dates for Survival
 ```{r}
@@ -1682,26 +1390,6 @@ plot_rv/plot_covid
 
 
 
-```{r}
-#Create dataframe with baseline model information:
-modeldata <- data.frame(cbind(modelfit$time,modelfit$surv,modelfit$cumhaz,modelfit$upper,modelfit$lower))
-names(modeldata) <- c("time","surv","cumhaz","upperCI","lowerCI")
-
-ggplot(data=NULL) +
-  geom_line(data=modeldata,aes(x=time, y=surv),colour="black",linetype="solid",size=1) +
-  geom_line(data=modeldata,aes(x=time, y=upperCI),colour="black",linetype="dashed",size=.5) +
-  geom_line(data=modeldata,aes(x=time, y=lowerCI),colour="black",linetype="dashed",size=.5) +
-  #scale_x_continuous(breaks=seq(0,480,120)) +
-  scale_y_continuous(breaks=seq(0,1,.25)) +
-  expand_limits(x=c(0,480),y=c(0,1)) +
-  xlab("Time in Task") + ylab("Survival Function") +
-theme_classic() +
-theme(axis.line.x = element_line(color = "black"),
-      axis.line.y = element_line(color = "black"))
-
-
-```
-
 ## (6). Incidence Plot
 
 ### Func inc Rate
@@ -1957,6 +1645,11 @@ tab_model(model2)
 
 
 
+
+# Misc Code
+
+
+
 ## Symptoms and CT
 ```{r}
 
@@ -2123,7 +1816,6 @@ Rhinovirus_TimeDependent_cov %>%
 ```
 
 
-$
 
 
 #Table 1

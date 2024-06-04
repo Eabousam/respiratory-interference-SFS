@@ -1,8 +1,9 @@
 ---
 title: "data_prep"
-output: html_document
+output: github_document
 date: "2024-06-04"
 ---
+
 # Libraries
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -42,9 +43,9 @@ library(survminer)
 ```{r}
 
 # set directory
-repo_root <- "/Users/eabousam" 
-repo      <- sprintf('%s/SFS-coinfection-interactions/',     repo_root)
-setwd(repo)
+#repo_root <- "/Users/eabousam" 
+#repo      <- sprintf('%s/SFS-coinfection-interactions/',     repo_root)
+#setwd(repo)
 
 ```
 
@@ -271,17 +272,17 @@ propmiss(encounter_rv_cv_pairs_conf)
 # MissRanger: Imputing missing data if any
 
 ```{r}
-# Exclude date, ct value from imputation
-encounter_rv_cv_pairs_conf_imp = encounter_rv_cv_pairs_conf %>%
-  #-ct_rv,-ct_cv,
-  dplyr::select(-covidshot1date, -covidshot2date, -covidshot3date )
-# Select columns to add
-encounter_rv_cv_pairs_conf_bind = encounter_rv_cv_pairs_conf %>%
-  ungroup() %>%
-  dplyr::select(ct_rv,ct_cv,covidshot1date, covidshot2date, covidshot3date)
-#Run imputation
-encounter_rv_cv_pairs_conf <- missRanger(encounter_rv_cv_pairs_conf_imp)
-encounter_rv_cv_pairs_conf = cbind(encounter_rv_cv_pairs_conf, encounter_rv_cv_pairs_conf_bind)
+# # Exclude date, ct value from imputation
+# encounter_rv_cv_pairs_conf_imp = encounter_rv_cv_pairs_conf %>%
+#   #-ct_rv,-ct_cv,
+#   dplyr::select(-covidshot1date, -covidshot2date, -covidshot3date )
+# # Select columns to add
+# encounter_rv_cv_pairs_conf_bind = encounter_rv_cv_pairs_conf %>%
+#   ungroup() %>%
+#   dplyr::select(ct_rv,ct_cv,covidshot1date, covidshot2date, covidshot3date)
+# #Run imputation
+# encounter_rv_cv_pairs_conf <- missRanger(encounter_rv_cv_pairs_conf_imp)
+# encounter_rv_cv_pairs_conf = cbind(encounter_rv_cv_pairs_conf, encounter_rv_cv_pairs_conf_bind)
 
 ```
 

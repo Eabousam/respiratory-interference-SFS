@@ -1,13 +1,12 @@
 ---
 title: "Interaction_analysis_clean"
-output: html_document
+output: github_document
 date: "2024-01-30"
 ---
 
 # Libraries
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-library(rmarkdown)
 library(dplyr)
 library(ggplot2)
 library(rigr)
@@ -36,6 +35,7 @@ library(splines)
 library(sjPlot)
 library(patchwork)
 library(survminer)
+
 ```
 
 
@@ -44,10 +44,10 @@ library(survminer)
 ```{r}
 
 # set directory
-repo_root <- "/Users/eabousam" 
-repo      <- sprintf('%s/SFS-coinfection-interactions/',     repo_root)
-setwd(repo)
-
+#repo_root <- "/Users/eabousam" 
+#repo      <- sprintf('%s/SFS-coinfection-interactions/',     repo_root)
+#setwd(repo)
+#setwd()
 ```
 
 
@@ -56,9 +56,60 @@ setwd(repo)
 ```{r}
 encounter_rv_cv_pairs_conf = readRDS("encounter_data_pairs.rds")
 
-sum(length(unique(encounter_rv_cv_pairs_conf$individual)))
 ```
 
+```{r}
+# Reshape the data from wide to long format
+
+summary_data <- DtAdjusted %>%
+  pivot_longer(cols = starts_with("present_"), 
+               names_to = "organism", 
+               values_to = "present") %>%
+  mutate(organism = gsub("present_", "", organism))
+
+
+# Calculate prevalence and positive percentage
+summary_data <- summary_data %>%
+  group_by(date, organism) %>%
+  summarise(
+    n = sum(present),
+    total_count = n_distinct(sample),
+    prevalence = n / n_distinct(individual),  # Prevalence calculation
+    positive_percentage = n / total_count    # Positive percentage calculation
+  ) %>%
+  ungroup() %>%
+  mutate(date = as.Date(date))
+
+# Modify organism labels
+summary_data$organism <- gsub("_", "-", summary_data$organism)
+summary_data$organism <- gsub("RSV.A", "RSV A", summary_data$organism)
+summary_data$organism <- gsub("RSV.B", "RSV B", summary_data$organism)
+summary_data$organism <- gsub("IAV..H1N1", "Influenza A H1N1", summary_data$organism)
+summary_data$organism <- gsub("IAV..H3N2", "Influenza A H3N2", summary_data$organism)
+summary_data$organism <- gsub("IBV", "Influenza B", summary_data$organism)
+
+# Plot the prevalence
+prevalence_plot <- ggplot(summary_data, aes(x = date, y = prevalence, fill = factor(organism))) +
+  geom_area(stat = "smooth", method = "loess", position = "fill", alpha = 0.9, span = 1/4) +
+  scale_fill_manual(name = "Organism",
+                    values = c(
+                      "Rhinovirus" = "#355070",
+                      "SARS-CoV-2" = "#F94144", 
+                      "RSV A" = "#F8961E",  
+                      "RSV B" = "#F9C74F",  
+                      "Influenza A H1N1" = "#90BE6D",
+                      "Influenza A H3N2" = "#577590",
+                      "Adenovirus" = "#6d597a",
+                      "Influenza B" = "#4D908E"
+                    )) +
+  labs(x = "Date", y = "Prevalence") +
+  scale_y_percent(scale = 100, limits = c(0, 100))
+
+# Plot the positive percentage
+ggplot(summary_data, aes(x = date, y = positive_percentage, fill = factor(organism))) +
+  geom_area(stat = "smooth", method = "loess", alpha = 0.9, span = 1/4)+
+  labs(x = "Date", y = "Positive Percentage")
+```
 
 # (1) Adjusting Start and Stop dates for Survival
 ```{r}
@@ -108,7 +159,7 @@ DtAdjusted$followupDate <- as.Date(DtAdjusted$date, origin = '1970-1-1')
 
 # How many individuals with atleast 2 encounters
 length(unique(DtAdjusted$individual))
-
+names(DtAdjusted)
 ```
 
 
@@ -403,7 +454,7 @@ Covid_TimeDependent %>%
 
 Covid_TimeDependent$Covid_TimeDependent <- factor(Covid_TimeDependent$Covid_TimeDependent, 
                                                   #'30 < Day <= 60',
-                                                            levels = c("No", 'Day <= 14','14 < Day <= 30', '30 < Day <= 60' ,"60 < Day <= 180",  "180 < Day <= 300", "300 < Day <= 420", "Day > 420"))
+                                                            levels = c("No", 'Day <= 14','14 < Day <= 30', '30 < Day <= 60' ,"60 < Day <= 180",  "180 < Day <= 365"))
 Covid_TimeDependent <- Covid_TimeDependent[, c("individual","sample", "enrollment_date", "followupDate", 
                                                         "start_adjusted", "gap_adjusted","stop_adjusted", "present_sars_cov_2_n", 
                                                         "Secondary_Group", "Covid_TimeDependent")]
@@ -656,7 +707,6 @@ IAV_TimeDependent <- IAV_TimeDependent[, c("individual","sample", "enrollment_da
                                                         "Secondary_Group", "IAV_TimeDependent")]
 rownames(IAV_TimeDependent) <- NULL
 
-
 table(IAV_TimeDependent$IAV_TimeDependent)
 
 ```
@@ -671,79 +721,79 @@ table(IAV_TimeDependent$IAV_TimeDependent)
 #######################################################################################################################
 
 # Step 1: aggregating other viral infections as secondary infections at each follow-up timepoint ######################
-Secondary_for_IBV <- DtAdjusted[, c( "present_rv_n","present_adv_n", "present_rsv_n", "present_sars_cov_2_n", "present_iav_n")]
-
-n <- nrow(Secondary_for_IBV)
-Secondary_Group <- c()
-for (i in 1:n) {
-  Secondary_Group[i] <- ifelse(any(Secondary_for_IBV[i, ] == 1) == T, 1, 0)
-}
-
-IBV<- cbind(DtAdjusted[, c("individual","sample", "enrollment_date", "followupDate", 
-                                  'start_adjusted','gap_adjusted', 'stop_adjusted',"present_ibv_n")], Secondary_Group)
-IBV$'IBV_TimeDependent' <- 'No'
-table(IBV$present_ibv_n)
-# Step 2: categorizing patients into patients with the targeted viral infection being the initial infection among all ## 
-# viral infections and patients with the targeted viral infection not being the initial infection among all viral ######
-# infections ###########################################################################################################
-id <- unique(IBV$individual)
-IBV_first_ID <- c()
-
-for(i in 1:length(id)){
-  Loca <- which(IBV$individual == id[i])
-  Trans <- IBV[Loca, ]
-
-  # Identify the timepoint of first infection
-  Location.First.IBV <- which(Trans$present_ibv_n == 1)[1]
-  Location.Secondary.Infection <- which(Trans$Secondary_Group == 1)
-  Logical.Test <- any(Location.First.IBV < Location.Secondary.Infection, na.rm = T)
-  if(Logical.Test){IBV_first_ID[i] <- id[i]}else{IBV_first_ID[i] <- NA}
-}
-IBV_first_ID <- na.omit(IBV_first_ID)
-
-IBV_NeedChange <- IBV[which(IBV$individual %in% IBV_first_ID), ]
-IBV_NeedNoChange <- IBV[-which(IBV$individual %in% IBV_first_ID),]
-
-# Step 3: creating dataset #############################################################################################
-## targeted viral infection being the initial infection among all viral infections
-DtIBV1 <- data.frame()
-for(i in 1:length(IBV_first_ID)){
-  # print(Rhinovirus_first_ID[i])
-  Trynew <- IBV_NeedChange[which(IBV_NeedChange$individual == IBV_first_ID[i]), ]
-  Trynew = data.frame(Trynew)
-  Trans <- Create.Time.Dependent.Dummy(Trynew, 'present_ibv_n', 'Secondary_Group', 
-                                       'stop_adjusted', 'start_adjusted', 'IBV_TimeDependent')
-  DtIBV1 <- rbind(DtIBV1, Trans)
-}
-
-
-## targeted viral infection not being the initial infection among all viral
-DtIBV2 <- data.frame()
-IBV_Second_ID <- unique(IBV_NeedNoChange$individual)
-for(i in 1:length(IBV_Second_ID)){
-  Trynew <- IBV_NeedNoChange[which(IBV_NeedNoChange$individual == IBV_Second_ID[i]), ]
-  if(sum(Trynew[, 'present_ibv_n']) != 0){
-    Trans <- Create.Time.Dependent.Dummy_Not_Dual(Trynew, 'present_ibv_n', 'stop_adjusted', 'IBV_TimeDependent')
-  }else{
-    Trans <- Trynew
-  }
-  DtIBV2 <- rbind(DtIBV2, Trans)
-}
-
-
-## combine two datasets
-IBV_TimeDependent <- rbind(DtIBV1, DtIBV2)
-
-IBV_TimeDependent$IBV_TimeDependent <- factor(IBV_TimeDependent$IBV_TimeDependent, 
-                                                  #'30 < Day <= 60',
-                                                            levels = c("No", 'Day <= 14','14 < Day <= 30', '30 < Day <= 60' ,"60 < Day <= 180", "180 < Day <= 365"))
-IBV_TimeDependent <- IBV_TimeDependent[, c("individual","sample", "enrollment_date", "followupDate", 
-                                                        "start_adjusted", "gap_adjusted","stop_adjusted", "present_ibv_n", 
-                                                        "Secondary_Group", "IBV_TimeDependent")]
-rownames(IBV_TimeDependent) <- NULL
-
-
-table(IBV_TimeDependent$IBV_TimeDependent)
+# Secondary_for_IBV <- DtAdjusted[, c( "present_rv_n","present_adv_n", "present_rsv_n", "present_sars_cov_2_n", "present_iav_n")]
+# 
+# n <- nrow(Secondary_for_IBV)
+# Secondary_Group <- c()
+# for (i in 1:n) {
+#   Secondary_Group[i] <- ifelse(any(Secondary_for_IBV[i, ] == 1) == T, 1, 0)
+# }
+# 
+# IBV<- cbind(DtAdjusted[, c("individual","sample", "enrollment_date", "followupDate", 
+#                                   'start_adjusted','gap_adjusted', 'stop_adjusted',"present_ibv_n")], Secondary_Group)
+# IBV$'IBV_TimeDependent' <- 'No'
+# table(IBV$present_ibv_n)
+# # Step 2: categorizing patients into patients with the targeted viral infection being the initial infection among all ## 
+# # viral infections and patients with the targeted viral infection not being the initial infection among all viral ######
+# # infections ###########################################################################################################
+# id <- unique(IBV$individual)
+# IBV_first_ID <- c()
+# 
+# for(i in 1:length(id)){
+#   Loca <- which(IBV$individual == id[i])
+#   Trans <- IBV[Loca, ]
+# 
+#   # Identify the timepoint of first infection
+#   Location.First.IBV <- which(Trans$present_ibv_n == 1)[1]
+#   Location.Secondary.Infection <- which(Trans$Secondary_Group == 1)
+#   Logical.Test <- any(Location.First.IBV < Location.Secondary.Infection, na.rm = T)
+#   if(Logical.Test){IBV_first_ID[i] <- id[i]}else{IBV_first_ID[i] <- NA}
+# }
+# IBV_first_ID <- na.omit(IBV_first_ID)
+# 
+# IBV_NeedChange <- IBV[which(IBV$individual %in% IBV_first_ID), ]
+# IBV_NeedNoChange <- IBV[-which(IBV$individual %in% IBV_first_ID),]
+# 
+# # Step 3: creating dataset #############################################################################################
+# ## targeted viral infection being the initial infection among all viral infections
+# DtIBV1 <- data.frame()
+# for(i in 1:length(IBV_first_ID)){
+#   # print(Rhinovirus_first_ID[i])
+#   Trynew <- IBV_NeedChange[which(IBV_NeedChange$individual == IBV_first_ID[i]), ]
+#   Trynew = data.frame(Trynew)
+#   Trans <- Create.Time.Dependent.Dummy(Trynew, 'present_ibv_n', 'Secondary_Group', 
+#                                        'stop_adjusted', 'start_adjusted', 'IBV_TimeDependent')
+#   DtIBV1 <- rbind(DtIBV1, Trans)
+# }
+# 
+# 
+# ## targeted viral infection not being the initial infection among all viral
+# DtIBV2 <- data.frame()
+# IBV_Second_ID <- unique(IBV_NeedNoChange$individual)
+# for(i in 1:length(IBV_Second_ID)){
+#   Trynew <- IBV_NeedNoChange[which(IBV_NeedNoChange$individual == IBV_Second_ID[i]), ]
+#   if(sum(Trynew[, 'present_ibv_n']) != 0){
+#     Trans <- Create.Time.Dependent.Dummy_Not_Dual(Trynew, 'present_ibv_n', 'stop_adjusted', 'IBV_TimeDependent')
+#   }else{
+#     Trans <- Trynew
+#   }
+#   DtIBV2 <- rbind(DtIBV2, Trans)
+# }
+# 
+# 
+# ## combine two datasets
+# IBV_TimeDependent <- rbind(DtIBV1, DtIBV2)
+# 
+# IBV_TimeDependent$IBV_TimeDependent <- factor(IBV_TimeDependent$IBV_TimeDependent, 
+#                                                   #'30 < Day <= 60',
+#                                                             levels = c("No", 'Day <= 14','14 < Day <= 30', '30 < Day <= 60' ,"60 < Day <= 180", "180 < Day <= 365"))
+# IBV_TimeDependent <- IBV_TimeDependent[, c("individual","sample", "enrollment_date", "followupDate", 
+#                                                         "start_adjusted", "gap_adjusted","stop_adjusted", "present_ibv_n", 
+#                                                         "Secondary_Group", "IBV_TimeDependent")]
+# rownames(IBV_TimeDependent) <- NULL
+# 
+# 
+# table(IBV_TimeDependent$IBV_TimeDependent)
 
 ```
 
@@ -966,27 +1016,27 @@ cox.zph(model) # Non-significance represents for valid proportional hazard assum
 
 ```{r}
 
-IBV_TimeDependent_cov <- IBV_TimeDependent %>%
-  #filter(!(present_ibv_n == 1 & Secondary_Group ==1)) %>%
-  left_join(DtAdjusted %>% 
-              dplyr::select(individual,sample, agebin, sex, symptoms), by = c("individual","sample")) %>%
-  mutate(agebin = case_when(
-    agebin %in% c("<1", "1-5") ~ "< 5",
-    TRUE ~ as.character(agebin))) %>%
-    mutate(agebin = factor(agebin, levels = c("17-45", "< 5", "46-65", "6-16", "66+"))) %>%
-  filter(sex != "other") %>%
-  mutate(sex = factor(sex, levels =c("female", "male"))) %>%
-  mutate(symptoms = if_else(symptoms %in% c("none", "{}", "{none}", "{none,none_2}"), "No", 
-                            if_else(is.na(symptoms), NA_character_, "Yes")))
-  
-
-# IBV primary unadjusted
-fomular_unadj <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ IBV_TimeDependent
-
-# Formula IBV adjusted
-fomular <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ IBV_TimeDependent + sex +  symptoms  + agebin
-# IBV Cox model
-model <- coxph(fomular, cluster = individual, data = IBV_TimeDependent_cov)
+# IBV_TimeDependent_cov <- IBV_TimeDependent %>%
+#   #filter(!(present_ibv_n == 1 & Secondary_Group ==1)) %>%
+#   left_join(DtAdjusted %>% 
+#               dplyr::select(individual,sample, agebin, sex, symptoms), by = c("individual","sample")) %>%
+#   mutate(agebin = case_when(
+#     agebin %in% c("<1", "1-5") ~ "< 5",
+#     TRUE ~ as.character(agebin))) %>%
+#     mutate(agebin = factor(agebin, levels = c("17-45", "< 5", "46-65", "6-16", "66+"))) %>%
+#   filter(sex != "other") %>%
+#   mutate(sex = factor(sex, levels =c("female", "male"))) %>%
+#   mutate(symptoms = if_else(symptoms %in% c("none", "{}", "{none}", "{none,none_2}"), "No", 
+#                             if_else(is.na(symptoms), NA_character_, "Yes")))
+#   
+# 
+# # IBV primary unadjusted
+# fomular_unadj <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ IBV_TimeDependent
+# 
+# # Formula IBV adjusted
+# fomular <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ IBV_TimeDependent + sex +  symptoms  + agebin
+# # IBV Cox model
+# model <- coxph(fomular, cluster = individual, data = IBV_TimeDependent_cov)
 
 # Model Summary
 tab_model(model)
@@ -1272,60 +1322,106 @@ range(Rhinovirus_TimeDependent_cov$enrollment_date)
 ## (6). Baseline hazard
 ```{r, warning=F, message=F}
 # Obtain cumulative baseline hazard 
-baselineHazard <- coxph(Surv(start_adjusted, stop_adjusted, present_cv_n) ~ present_rv_n, cluster = individual, data = DtAdjusted)
-
-ggsurvplot(surv_obj, data = Rhinovirus_TimeDependent_cov, strata = "present_rv_n")
-#Plot kaplan meier curve to see the violation of proportional hazard
-
+baselineHazard <- coxph(Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ Rhinovirus_TimeDependent, cluster = individual, data = Rhinovirus_TimeDependent_cov)
 
 bhest <- basehaz(baselineHazard)
-bhest$'Calendar.Date' <- Minimum_Date_Calendar + bhest$time
-# Take numerical derivative of cumulative baseline hazard to get baseline hazard
-Baseline.Hazard <- data.frame('t' = bhest[-1, 2], 
-                              'h' = diff(bhest[, 1])/diff(bhest[, 2]),
-                              'Calendar.Date' = bhest[-1, 3])
-Baseline.Hazard$'Virus' <- 'Rhinovirus'
 
-# Create breaks for x-axis
-Breaks <- c(min(Baseline.Hazard$Calendar.Date))
-n_timepoint <- 10
-for (i in 2:n_timepoint) {
-  Breaks[i] <- Breaks[(i - 1)] + 90    
+#function 
+finite_differences <- function(x, y) {
+  n <- length(x)
+  derivativeFunction <- vector(length = n)
+  for (i in 2:n) {
+    derivativeFunction[i-1] <- (y[i-1] - y[i]) / (x[i-1] - x[i])
+  }
+  derivativeFunction[n] <- (y[n] - y[n - 1]) / (x[n] - x[n - 1])
+  return(derivativeFunction)
 }
 
+# Calculate numerical derivative
+deri <- finite_differences(x = bhest$time, y = bhest$hazard)
+baselineHazard <- cbind(bhest, deri)
+colnames(baselineHazard) <- c('CumulativeBaselineHazard', 'Time', 'BaselineHazard')
 
-# Visualize smooth baseline hazard function with cubic spline
+# Non-parametric smooth curve for estimating baseline hazard function over time
+smoothBH <- ss(x = baselineHazard$Time, y = baselineHazard$BaselineHazard, df = 4)
+
+# Non-parametric smooth curve for estimating cumulative baseline hazard function over time
+smoothCBH <- ss(x = baselineHazard$Time, y = baselineHazard$CumulativeBaselineHazard, df = 6)
+
+Dt_Plot <- data.frame('Time' = baselineHazard$Time, 
+                      'BH' = baselineHazard$BaselineHazard, 
+                      'smoothBH' = smoothBH$y, 
+                      'CBH' = baselineHazard$CumulativeBaselineHazard, 
+                      'smoothCBH' = smoothCBH$y)
+
+
+
+
+# Set up color for smooth curves
+colors <- c("Baseline hazard" = "blue", "Cumulative baseline\nhazard" = "#FFA500")
+
+# Create scale factor for second y-axis
+scaleFactor <- max(Dt_Plot$BH) /  max(Dt_Plot$CBH)
+
+# Create x and y labels
+xlab <- seq(0, 1000, length.out = 11)
+ylab <- seq(0, 0.04, length.out = 5)
+
+# Create figure
 p <- 
-ggplot(Baseline.Hazard, aes(x = Calendar.Date, y = h)) + 
-  geom_smooth(method = 'loess', se = F, size = 0.5, col = 'black')+
-  #geom_smooth(method = 'gam', formula = y ~ bs(x, 3), se = F, size = 0.5, col = 'black') +  
-  labs(x = 'Calendar Time (Y-M-D)', y = 'Baseline Hazard', 
-       title = 'Smooth Estimated Baseline Hazard Function (Rhinovirus)') + 
-  scale_x_continuous(expand = c(0.01, 0), breaks = Breaks) +
-  scale_y_continuous(expand = c(0.01, 0), limits = c(0, 0.007), 
-                     breaks = seq(0, 0.007, length.out = 10), 
-                     labels = round(seq(0, 0.007, length.out = 10), 4)) + 
+  ggplot(Dt_Plot, aes(x = Time)) + 
+  geom_point(aes(y = BH, color = 'Baseline hazard'), size = 0.75, alpha = 0.3) + 
+  geom_path(aes(y = BH, color = 'Baseline hazard')) + 
+  geom_path(aes(y = CBH * scaleFactor, color = 'Cumulative baseline\nhazard')) + 
+  geom_point(aes(y = CBH * scaleFactor, color = 'Cumulative baseline\nhazard'), size = 0.75, alpha = 0.3) + 
+  labs(x = 'Time', y = 'Raw baseline hazard') + 
+  scale_x_continuous(expand = c(0, 0.01), limits = c(0, 1000), breaks = xlab, labels = xlab) +
+  scale_y_continuous(expand = c(0, 0.01), 
+                     sec.axis = sec_axis(trans = ~ ./scaleFactor, name = "Raw cumulative baseline hazard")) + 
+  scale_color_manual(values = colors) + 
   theme_bw() + 
   theme(panel.background = element_blank(),                    
-        # panel.grid.major = element_blank(), 
-        # panel.grid.minor = element_blank(),
         axis.line.x = element_line(),                               
         axis.line.y = element_line(),
-        axis.text.x = element_text(color = "black", size = 7, angle = 0), 
-        axis.text.y = element_text(color = 'black', size = 7), 
-        plot.title = element_text(hjust = 0.5, face = "bold"))
-p  
+        axis.text.x = element_text(color = "black", size = 7), 
+        axis.text.y = element_text(color = 'black', size = 7),
+        legend.title = element_blank())
+p
+# Visualize smooth baseline hazard function with cubic spline
+# Create scale factor for second y-axis
+scaleFactor <- max(Dt_Plot$smoothBH) /  max(Dt_Plot$smoothCBH)
 
-
+# Create figure
+p <- 
+  ggplot(Dt_Plot, aes(x = Time)) + 
+  geom_path(aes(y = smoothBH, color = 'Baseline hazard')) + 
+  geom_path(aes(y = smoothCBH * scaleFactor, color = 'Cumulative baseline\nhazard')) + 
+  labs(x = 'Time', y = 'Baseline hazard') + 
+  scale_x_continuous(expand = c(0, 0), limits = c(0, 1000))+
+                     #, breaks = xlab, labels = xlab) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 0.04),
+                     #, breaks = ylab, labels = round(ylab, 3), 
+                     sec.axis = sec_axis(trans = ~ ./scaleFactor, name = "Cumulative baseline hazard")) + 
+  scale_color_manual(values = colors) + 
+  theme_bw() + 
+  theme(panel.background = element_blank(),                    
+        axis.line.x = element_line(),                               
+        axis.line.y = element_line(),
+        axis.text.x = element_text(color = "black", size = 7), 
+        axis.text.y = element_text(color = 'black', size = 7),
+        legend.title = element_blank())
+p
 ```
+
+
+
 
 ### (6.1) Kaplan M curves showing non-proportional hazard
 
 ```{r}
 
-
 # Formula Rhinovirus adjusted
-fomular <- Surv(start_adjusted, stop_adjusted, Secondary_Group) ~ present_sars_cov_2_n + sex+ agebin + symptoms
+fomular <- Surv(start_adjusted, stop_adjusted, present_rv_new) ~ present_sars_cov_2_n + sex+ agebin + symptoms
 # Rhinovirus model
 model <- coxph(fomular,cluster = individual, data = Covid_TimeDependent_cov)
 summary(model)
@@ -1334,7 +1430,7 @@ summary(model)
 # Define survival function
 survival_function_Cov <- function(data_x, strata_x) {
   # Create survival object
-  data_x$s <- Surv(data_x$start_adjusted, data_x$stop_adjusted, data_x$Secondary_Group)
+  data_x$s <- Surv(data_x$start_adjusted, data_x$stop_adjusted, data_x$present_rv_new)
   # Create survival formula
   survFormula <- as.formula(paste("s ~", strata_x))
   # Fit survival model
@@ -1384,12 +1480,11 @@ survival_function_rv<- function(data_x, strata_x) {
 
 
 # Call survival function with appropriate arguments
-plot_covid = survival_function_Cov(data_x = Covid_TimeDependent_cov, strata_x = "present_sars_cov_2_n")
+plot_covid = survival_function_Cov(data_x = tt, strata_x = "present_sars_cov_2_n")
 
 plot_rv = survival_function_rv(data_x = Rhinovirus_TimeDependent_cov, strata_x = "present_rv_n")
 
 
-plot_rv/plot_covid
 ```
 
 
@@ -1399,102 +1494,105 @@ plot_rv/plot_covid
 ### (7.1) Func inc Rate
 ```{r}
 
-## Incidence rate by months
-Incidence.Calculator <- function(dataset){
+
+# Function to calculate incidence rate
+Incidence.Calculator.Secondary<- function(dataset) {
+
   # Extract selected columns
-  Dt <- dataset[, c('individual', 
-                    'enrollment_date',
-                    'followupDate',       # we have this already
-                    'start_adjusted',     # we have this already
-                    'stop_adjusted',      # we have this already
-                    'gap_adjusted',
-                    'Secondary_Group')]
-  
+  Dt <- dataset[, c('individual', 'enrollment_date', 'followupDate', 'start_adjusted', 'stop_adjusted', 'gap_adjusted', "Secondary_Group")]
   # Create person-day column
-  Dt$'Person_day' <- NA
-  
-  # Calculate the person-day based on year-month combination
-  Dt$'Year_Month' <- format(as.Date(Dt[, 'followupDate']), "%Y-%m")
-  
-  # Person-day calculation
-  id <- unique(Dt[, 'individual'])
-  Dt2 <- data.frame()
-  for(i in 1:length(id)){
-    Trans <- Dt[which(Dt[, 'individual'] == id[i]), ]
-    n <- nrow(Trans)
-    for(j in 1:n) {
-      if(Trans[j, 'Secondary_Group'] == 1){
-        Trans[j, 'Person_day'] <- sum(Trans[1:j, 'gap_adjusted'])
-      }
-    }
-    Dt2 <- rbind(Dt2, Trans)
-  }
-  Dt <- Dt2
-  
+  Dt$Person_day <- NA
+  Dt$Year_Month <- format(as.Date(Dt$followupDate), "%Y-%m")
+  Dt = Dt %>%
+    group_by(individual) %>%
+    mutate(Person_day = as.integer(followupDate - enrollment_date),
+           Secondary_Count = cumsum(Secondary_Group))
   # Calculation of Incidence
-  Category <- unique(Dt[, 'Year_Month'])[order(unique(Dt[, 'Year_Month']))]
-  Incidence.Calendar <- data.frame('Alternative' = 1:length(Category), 
-                                   'Time' = Category,
-                                   'Secondary_Count' = 0,
-                                   'Person_day' = 0)
-  n.Dt <- nrow(Dt)
-  for(i in 1:n.Dt){
-    if(Dt[i, 'Secondary_Group'] == 1){
-      loca <- match(Dt[i, 'Year_Month'], Category)
-      Incidence.Calendar[loca, 'Secondary_Count'] <- Incidence.Calendar[loca, 'Secondary_Count'] + 1
-      Incidence.Calendar[loca, 'Person_day'] <- Incidence.Calendar[loca, 'Person_day'] + Dt[i, 'Person_day']
-    }
-  }
+  Category <- unique(Dt$Year_Month)[order(unique(Dt$Year_Month))]
   
-  Incidence.Calendar$'Incidence' <- Incidence.Calendar[, 'Secondary_Count'] / Incidence.Calendar[, 'Person_day']
-  Incidence.Calendar$Incidence <- round(ifelse(is.nan(Incidence.Calendar$Incidence), 0, Incidence.Calendar$Incidence), 4)
+  Incidence.Calendar = Dt %>%
+    group_by(Year_Month) %>%
+    summarise(Secondary_Count= sum(Secondary_Count),
+              Person_day = sum(Person_day)) %>%
+    mutate(Incidence = Secondary_Count/Person_day, 
+           Alternative = 1:length(Incidence))
+  
   return(Incidence.Calendar)
 }
 
 
+# Function to calculate incidence rate
+Incidence.Calculator.Primary<- function(dataset, pathogen) {
 
+  # Extract selected columns
+  Dt <- dataset[, c('individual', 'enrollment_date', 'followupDate', 'start_adjusted', 'stop_adjusted', 'gap_adjusted', pathogen)]
+  # Create person-day column
+  Dt$Person_day <- NA
+  Dt$Year_Month <- format(as.Date(Dt$followupDate), "%Y-%m")
+  Dt = Dt %>%
+    group_by(individual) %>%
+    mutate(Person_day = as.integer(followupDate - enrollment_date),
+           Primary_Count = cumsum(!!as.symbol(pathogen)))
+  # Calculation of Incidence
+  Category <- unique(Dt$Year_Month)[order(unique(Dt$Year_Month))]
+  
+  Incidence.Calendar = Dt %>%
+    group_by(Year_Month) %>%
+    summarise(Primary_Count= sum(Primary_Count),
+              Person_day = sum(Person_day)) %>%
+    mutate(Incidence = Primary_Count/Person_day, 
+           Alternative = 1:length(Incidence))
+  
+  return(Incidence.Calendar)
+}
 
+Rhinovirus_TimeDependent
 
 ```
 
-### (7.2) Incidence plot
+
+
+
+
+
+### (7.2) Incidence plot for secondary infections
+
 ```{r}
 
-table(DtAdjusted$present_adv_n)
+incidence_rhino <- Incidence.Calculator.Secondary(Rhinovirus_TimeDependent)
 
-incidence_rhino <- Incidence.Calculator(Rhinovirus_TimeDependent)
 # Covid
-incidence_covid =  Incidence.Calculator(Covid_TimeDependent)
+incidence_covid =  Incidence.Calculator.Secondary(Covid_TimeDependent)
 #ADV
-incidence_adv =  Incidence.Calculator(Adenovirus_TimeDependent)
+incidence_adv =  Incidence.Calculator.Secondary(Adenovirus_TimeDependent)
 #Rsv
-incidence_rsv =  Incidence.Calculator(RSV_TimeDependent)
+incidence_rsv =  Incidence.Calculator.Secondary(RSV_TimeDependent)
 #Influenza A
-incidence_iav =  Incidence.Calculator(IAV_TimeDependent)
+incidence_iav =  Incidence.Calculator.Secondary(IAV_TimeDependent)
 
-incidence_ibv =  Incidence.Calculator(IBV_TimeDependent)
+#incidence_ibv =  Incidence.Calculator(IBV_TimeDependent)
 
 ```
 
 ```{r}
 
 # Non-parametric smooth curve for estimating incidence rate over time for COVID-19
-smoothIncidence_covid <- ss(x = incidence_covid$Alternative, y = incidence_covid$Incidence, df = 6)
+smoothIncidence_covid <- ss(x = incidence_covid$Alternative, y = incidence_covid$Incidence, df = 4)
 
 # Non-parametric smooth curve for estimating incidence rate over time for Rhinovirus
-smoothIncidence_rhino <- ss(x = incidence_rhino$Alternative, y = incidence_rhino$Incidence, df = 6)
+smoothIncidence_rhino <- ss(x = incidence_rhino$Alternative, y = incidence_rhino$Incidence, df = 4)
 
 # Non-parametric smooth curve for estimating incidence rate over time for Adenovirus
-smoothIncidence_adv <- ss(x = incidence_adv$Alternative, y = incidence_adv$Incidence, df = 6)
+smoothIncidence_adv <- ss(x = incidence_adv$Alternative, y = incidence_adv$Incidence, df = 4)
 
 # Non-parametric smooth curve for estimating incidence rate over time for RSV
-smoothIncidence_rsv <- ss(x = incidence_rsv$Alternative, y = incidence_rsv$Incidence, df = 6)
+smoothIncidence_rsv <- ss(x = incidence_rsv$Alternative, y = incidence_rsv$Incidence, df = 4)
 
 # Non-parametric smooth curve for estimating incidence rate over time for Influenza A
-smoothIncidence_iav <- ss(x = incidence_iav$Alternative, y = incidence_iav$Incidence, df = 6)
+smoothIncidence_iav <- ss(x = incidence_iav$Alternative, y = incidence_iav$Incidence, df = 4)
 
 # Non-parametric smooth curve for estimating incidence rate over time for Influenza B
-smoothIncidence_ibv <- ss(x = incidence_ibv$Alternative, y = incidence_ibv$Incidence, df = 6)
+#smoothIncidence_ibv <- ss(x = incidence_ibv$Alternative, y = incidence_ibv$Incidence, df = 6)
 
 # Create data frames for plotting
 Dt.Plot_covid <- data.frame('x' = smoothIncidence_covid$x, 'y' = ifelse(smoothIncidence_covid$y < 0, 0, smoothIncidence_covid$y), 'Virus' = 'Covid Primary')
@@ -1502,13 +1600,13 @@ Dt.Plot_rhino <- data.frame('x' = smoothIncidence_rhino$x, 'y' = ifelse(smoothIn
 Dt.Plot_adv <- data.frame('x' = smoothIncidence_adv$x, 'y' = ifelse(smoothIncidence_adv$y < 0, 0, smoothIncidence_adv$y), 'Virus' = 'Adenovirus Primary')
 Dt.Plot_rsv <- data.frame('x' = smoothIncidence_rsv$x, 'y' = ifelse(smoothIncidence_rsv$y < 0, 0, smoothIncidence_rsv$y), 'Virus' = 'RSV Primary')
 Dt.Plot_iav <- data.frame('x' = smoothIncidence_iav$x, 'y' = ifelse(smoothIncidence_iav$y < 0, 0, smoothIncidence_iav$y), 'Virus' = 'Influenza A Primary')
-Dt.Plot_ibv <- data.frame('x' = smoothIncidence_ibv$x, 'y' = ifelse(smoothIncidence_ibv$y < 0, 0, smoothIncidence_ibv$y), 'Virus' = 'Influenza B Primary')
+#Dt.Plot_ibv <- data.frame('x' = smoothIncidence_ibv$x, 'y' = ifelse(smoothIncidence_ibv$y < 0, 0, smoothIncidence_ibv$y), 'Virus' = 'Influenza B Primary')
 
 # Combine the data frames
 Dt.Plot_combined <- rbind(Dt.Plot_covid, Dt.Plot_rhino, Dt.Plot_adv, Dt.Plot_rsv, Dt.Plot_iav)
 
 # Create x-axis label
-xLabel <- unique(incidence_rhino$Time)
+xLabel <- unique(incidence_rhino$Year_Month)
 
 # Round digit function
 scaleFUN <- function(x){sprintf("%.2f", x)}
@@ -1520,20 +1618,192 @@ Dt.Plot_combined %>%
   geom_line(alpha = 0.75) + 
   xlab('Calendar Time (Y-M)') + 
   ylab('Incident Rate (Number of Detection / Person-day)') + 
-  scale_color_manual(values = c("Covid Primary" = "orange", "RV Primary" = "blue", "Adenovirus Primary" = "green", "RSV Primary" = "red", "Influenza A Primary"= "purple",
+  scale_color_manual(name = "Secondary to", values = c("Covid Primary" = "orange", "RV Primary" = "blue", "Adenovirus Primary" = "green", "RSV Primary" = "red", "Influenza A Primary"= "purple",
                                  "Influenza B Primary"= "black")) + 
   theme_bw() +
-  scale_x_continuous(expand = c(0.005, 0), breaks = 1:length(xLabel), labels = xLabel) +
+  scale_x_continuous(expand = c(0.005, 0),
+                     breaks = seq(1, length(xLabel)), # Adjust 'by' to show fewer labels
+                     labels = xLabel[seq(1, length(xLabel))]) +
+  theme(panel.background = element_blank(),                    
+        axis.line.x = element_line(),                               
+        axis.line.y = element_line(),
+        axis.text.x = element_text(color = "black", size = 7, angle = 45, hjust = 1), 
+        axis.text.y = element_text(color = 'black', size = 7))
+
+range(as.Date(DtAdjusted$date))
+```
+
+
+### (7.3) Primary Incidence
+
+```{r}
+#RV
+incidence_rhino.primary <- Incidence.Calculator.Primary(DtAdjusted, "present_rv_n")
+#Covid
+incidence_covid.primary = Incidence.Calculator.Primary(DtAdjusted, "present_sars_cov_2_n")
+#ADV
+incidence_adv.primary =  Incidence.Calculator.Primary(DtAdjusted, "present_adv_n")
+#Rsv
+incidence_rsv.primary =  Incidence.Calculator.Primary(DtAdjusted, "present_rsv_n")
+#Influenza A
+incidence_iav.primary =  Incidence.Calculator.Primary(DtAdjusted, "present_iav_n")
+
+
+
+```
+
+
+```{r}
+
+
+# Smooth curves for each virus
+smoothIncidence_rhino_primary <- smooth.spline(incidence_rhino.primary$Alternative, incidence_rhino.primary$Incidence, df = 4)
+smoothIncidence_covid_primary <- smooth.spline(incidence_covid.primary$Alternative, incidence_covid.primary$Incidence, df = 8)
+smoothIncidence_adv_primary <- smooth.spline(incidence_adv.primary$Alternative, incidence_adv.primary$Incidence, df = 4)
+smoothIncidence_rsv_primary <- smooth.spline(incidence_rsv.primary$Alternative, incidence_rsv.primary$Incidence, df = 4)
+smoothIncidence_iav_primary <- smooth.spline(incidence_iav.primary$Alternative, incidence_iav.primary$Incidence, df = 4)
+
+# Create data frames for plotting
+Dt.Plot_rhino_primary <- data.frame('x' = smoothIncidence_rhino_primary$x, 'y' = ifelse(smoothIncidence_rhino_primary$y < 0, 0, smoothIncidence_rhino_primary$y), 'Virus' = 'Rhinovirus')
+Dt.Plot_covid_primary <- data.frame('x' = smoothIncidence_covid_primary$x, 'y' = ifelse(smoothIncidence_covid_primary$y < 0, 0, smoothIncidence_covid_primary$y), 'Virus' = 'Covid-19')
+Dt.Plot_adv_primary <- data.frame('x' = smoothIncidence_adv_primary$x, 'y' = ifelse(smoothIncidence_adv_primary$y < 0, 0, smoothIncidence_adv_primary$y), 'Virus' = 'Adenovirus')
+Dt.Plot_rsv_primary <- data.frame('x' = smoothIncidence_rsv_primary$x, 'y' = ifelse(smoothIncidence_rsv_primary$y < 0, 0, smoothIncidence_rsv_primary$y), 'Virus' = 'Respiratory Syncytial Virus')
+Dt.Plot_iav_primary <- data.frame('x' = smoothIncidence_iav_primary$x, 'y' = ifelse(smoothIncidence_iav_primary$y < 0, 0, smoothIncidence_iav_primary$y), 'Virus' = 'Influenza A')
+
+# Combine the data frames
+Dt.Plot_combined_primary <- rbind(Dt.Plot_rhino_primary, Dt.Plot_covid_primary, Dt.Plot_adv_primary, Dt.Plot_rsv_primary, Dt.Plot_iav_primary)
+
+# Create x-axis label
+xLabel <- unique(incidence_adv.primary$Year_Month)
+# Round digit function
+scaleFUN <- function(x){sprintf("%.2f", x)}
+
+# Plot the combined incidence data with different colors for each pathogen
+Dt.Plot_combined_primary %>%
+  ggplot(aes(x = x, y = y, color = Virus)) + 
+  geom_line(alpha = 0.75) + 
+  xlab('Calendar Time (Y-M)') + 
+  ylab('Incident Rate (Number of Detection / Person-day)') + 
+  scale_color_manual(values = c("Covid-19" = "orange", "Rhinovirus" = "blue", "Adenovirus" = "green", "Respiratory Syncytial Virus" = "red", "Influenza A" = "purple")) + 
+  theme_bw() +
+  scale_x_continuous(expand = c(0.005, 0),
+                     breaks = seq(1, length(xLabel)), # Adjust 'by' to show fewer labels
+                     labels = xLabel[seq(1, length(xLabel))]) +
   theme(panel.background = element_blank(),                    
         axis.line.x = element_line(),                               
         axis.line.y = element_line(),
         axis.text.x = element_text(color = "black", size = 7, angle = 45, hjust = 1), 
         axis.text.y = element_text(color = 'black', size = 7),
         legend.title = element_blank())
-
-range(as.Date(DtAdjusted$date))
 ```
 
+
+
+
+```{r}
+
+
+# Function to calculate incidence rate for primary column
+Incidence.Calculator.Primary <- function(dataset) {
+  # Identify the primary column starting with "present_"
+  primary_col <- grep("^present_", colnames(dataset), value = TRUE)
+  if (length(primary_col) != 1) {
+    stop("There should be exactly one column starting with 'present_'")
+  }
+  
+  # Rename the primary column to 'present'
+  colnames(dataset)[colnames(dataset) == primary_col] <- 'present'
+  
+  # Extract selected columns
+  Dt <- dataset[, c('individual', 'enrollment_date', 'followupDate', 'start_adjusted', 'stop_adjusted', 'gap_adjusted', 'present')]
+  
+  # Create person-day column
+  Dt$Person_day <- NA
+  
+  # Calculate person-day for each individual
+  Dt$Person_day <- Dt$stop_adjusted - Dt$start_adjusted
+  # Person-day calculation
+  id <- unique(Dt$individual)
+  Dt2 <- data.frame()
+  for (i in 1:length(id)) {
+    Trans <- Dt[Dt$individual == id[i], ]
+    n <- nrow(Trans)
+    for (j in 1:n) {
+      if (Trans[j, 'present'] == 1) {
+        Trans[j, 'Person_day'] <- sum(Trans[1:j, 'gap_adjusted'])
+      }
+    }
+    Dt2 <- rbind(Dt2, Trans)
+  }
+  Dt <- Dt2
+  
+  
+  Dt$Year_Month <- format(as.Date(Dt$followupDate), "%Y-%m-%d")
+  # Calculation of Incidence
+  Category <- unique(Dt$Year_Month)[order(unique(Dt$Year_Month))]
+  Incidence.Calendar <- data.frame('Alternative' = 1:length(Category), 'Time' = Category, 'Primary_Count' = 0, 'Person_day' = 0)
+  
+  n.Dt <- nrow(Dt)
+  for (i in 1:n.Dt) {
+    if (Dt[i, 'present'] == 1) {
+      loca <- match(Dt[i, 'followupDate'], Category)
+      Incidence.Calendar[loca, 'Primary_Count'] <- Incidence.Calendar[loca, 'Primary_Count'] + 1
+      Incidence.Calendar[loca, 'Person_day'] <- Incidence.Calendar[loca, 'Person_day'] + Dt[i, 'Person_day']
+    }
+  }
+  Incidence.Calendar$Incidence <- Incidence.Calendar$Primary_Count / Incidence.Calendar$Person_day
+  Incidence.Calendar$Incidence <- round(ifelse(is.nan(Incidence.Calendar$Incidence), 0, Incidence.Calendar$Incidence), 4)
+  
+  return(Incidence.Calendar)
+}
+
+
+
+
+DtAdjusted
+```
+
+
+
+
+
+
+
+
+
+```{r}
+# Convert data to survival object
+surv_obj <- Surv(Rhinovirus_TimeDependent$start_adjusted, Rhinovirus_TimeDependent$present_rv_n)
+
+# Create a dataframe with calendar time intervals
+
+# Calculate person-time at risk for each interval
+person_time <- sapply(calendar_intervals, function(interval) {
+  sum(data$stop_adjusted[Rhinovirus_TimeDependent$start_adjusted <= interval & Rhinovirus_TimeDependent$stop_adjusted >= interval])
+})
+
+# Calculate the number of events (cases) within each interval
+event_counts <- sapply(calendar_intervals, function(interval) {
+  sum(Rhinovirus_TimeDependent$present_rv_n[Rhinovirus_TimeDependent$start_adjusted <= interval & Rhinovirus_TimeDependent$stop_adjusted >= interval])
+})
+
+# Calculate incidence rate for each interval
+incidence_rate <- event_counts / person_time
+
+# Create a dataframe for plotting
+incidence_df <- data.frame(
+  Calendar_Time = calendar_intervals,
+  Incidence_Rate = incidence_rate
+)
+
+# Plot the incidence rate over calendar time
+ggplot(incidence_df, aes(x = Calendar_Time, y = Incidence_Rate)) +
+  geom_line() +
+  xlab("Calendar Time") +
+  ylab("Incidence Rate") +
+  ggtitle("Incidence Rate Over Calendar Time")
+
+```
 
 
 
@@ -1598,8 +1868,150 @@ p
 ```
 
 
+## (8) Table 1
+```{r}
 
-## (8) CT value subsequent to infection analysis
+# Figure to show what is circualting around that time
+
+DtAdjusted %>%
+  mutate(med = mean(stop_adjusted- start_adjusted))
+# Table 1: Clinical and Demographic Characteristics of Study Participants by Type of Respiratory Virus Detected Among Unique Nasal Swab Specimens
+
+# Filter out 'other' gender entries
+filtered_data <- DtAdjusted %>%
+  filter(sex != "other")
+length(unique(DtAdjusted$individual))
+# Summarize demographic characteristics
+table_demog <- filtered_data %>%
+  summarize(
+    Total_Specimens_Tested = n(),
+    None_Detected_N = sum(present_rv_n == 0 & present_sars_cov_2_n == 0 & present_rsv_n == 0 & present_adv_n == 0 & present_iav_n == 0 & present_ibv_n == 0),
+    
+    Rhinovirus_N = sum(present_rv_n > 0),
+    Covid_N = sum(present_sars_cov_2_n > 0),
+    RSV_N = sum(present_rsv_n > 0),
+    Adenovirus_N = sum(present_adv_n > 0),
+    Influenza_A_N = sum(present_iav_n > 0),
+    Influenza_B_N = sum(present_ibv_n > 0),
+        Co_Detection = sum(rowSums(select(., present_rv_n, present_sars_cov_2_n, present_rsv_n, present_adv_n, present_iav_n, present_ibv_n)) > 2))
+
+
+
+# Define the total number of specimens tested
+total_tested <- table_demog$Total_Specimens_Tested
+
+# Calculate the number and percentage of specimens with no virus detected
+none_detected_count <- table_demog$None_Detected_N
+none_detected_percent <- none_detected_count / total_tested * 100
+
+# Calculate the number and percentage of specimens with Human Rhinovirus detected
+rhinovirus_count <- table_demog$Rhinovirus_N
+rhinovirus_percent <- rhinovirus_count / total_tested * 100
+
+# Calculate the number and percentage of specimens with SARS-CoV-2 detected
+covid_count <- table_demog$Covid_N
+covid_percent <- covid_count / total_tested * 100
+
+# Calculate the number and percentage of specimens with RSV detected
+rsv_count <- table_demog$RSV_N
+rsv_percent <- rsv_count / total_tested * 100
+
+# Calculate the number and percentage of specimens with Adenovirus detected
+adenovirus_count <- table_demog$Adenovirus_N
+adenovirus_percent <- adenovirus_count / total_tested * 100
+
+# Calculate the number and percentage of specimens with Influenza A detected
+influenza_a_count <- table_demog$Influenza_A_N
+influenza_a_percent <- influenza_a_count / total_tested * 100
+
+# Calculate the number and percentage of specimens with Influenza B detected
+influenza_b_count <- table_demog$Influenza_B_N
+influenza_b_percent <- influenza_b_count / total_tested * 100
+
+# Calculate the number and percentage of specimens with Co-detection
+co_detection_count <- table_demog$Co_Detection
+co_detection_percent <- co_detection_count / total_tested * 100
+
+# Create the table
+# Create the table
+table1 <- data.frame(
+  "Characteristic" = c("Total Specimens Tested", "No Virus Detected", "Rhinovirus Detected", "SARS-CoV-2 Detected", "RSV Detected", "Adenovirus Detected", "Influenza A Detected", "Influenza B Detected", "Co-Detection"),
+  "Count" = c(total_tested, none_detected_count, rhinovirus_count, covid_count, rsv_count, adenovirus_count, influenza_a_count, influenza_b_count, co_detection_count),
+  "Percentage" = c(100, none_detected_percent, rhinovirus_percent, covid_percent, rsv_percent, adenovirus_percent, influenza_a_percent, influenza_b_percent, co_detection_percent)
+)
+
+table1
+length(unique(DtAdjusted$individual))
+```
+
+
+```{r}
+
+# Define the covariates of interest
+covariates <- c("Sex", "Age group", "Self-Reported Symptoms")
+
+# Table 2: Secondary group
+DtAdjusted %>%
+  mutate(agebin = case_when(
+    agebin %in% c("<1", "1-5") ~ "< 5",
+    TRUE ~ as.character(agebin)
+  )) %>%
+  filter(!sex == "other") %>%
+  mutate(none_detected = (present_rv_n == 0 & present_sars_cov_2_n == 0 & present_rsv_n == 0 & present_adv_n == 0 & present_iav_n == 0 & present_ibv_n == 0)) %>%
+  mutate(co_detect = (present_rv_n == 1 & present_sars_cov_2_n == 1) | (present_rv_n == 1 & present_rsv_n == 1) | (present_rv_n == 1 & present_adv_n == 1) | (present_rv_n == 1 & present_iav_n == 1) | (present_rv_n == 1 & present_ibv_n == 1) | 
+                       (present_sars_cov_2_n == 1 & present_rsv_n == 1) | (present_sars_cov_2_n == 1 & present_adv_n == 1) | (present_sars_cov_2_n == 1 & present_iav_n == 1) | (present_sars_cov_2_n == 1 & present_ibv_n == 1) | 
+                       (present_rsv_n == 1 & present_adv_n == 1) | (present_rsv_n == 1 & present_iav_n == 1) | (present_rsv_n == 1 & present_ibv_n == 1) | 
+                       (present_adv_n == 1 & present_iav_n == 1) | (present_adv_n == 1 & present_ibv_n == 1) | 
+                       (present_iav_n == 1 & present_ibv_n == 1)) %>%
+  dplyr::select(-individual, -sample) %>%
+  tbl_summary(
+    by = "agebin",
+    #statistic = list(
+    #  all_continuous() ~ "{n} ({p}%)"
+    #),
+    missing = "no"
+  ) %>%
+  modify_header(label = "**Variable**") %>%
+  modify_caption("Table 2. Descriptive statistics of Seattle Flu Study SCAN unique individuals stratified by Subsequent presence of SARS-CoV-2 Infection") %>%
+  bold_labels() %>%
+  as_flex_table() %>%
+  flextable::fontsize(size = 15, part = "all") %>%
+  theme_apa() %>%
+  bg(bg = "white", part = "body") %>%
+  bg(bg = "white", part = "header")
+
+
+
+
+# generate function secondary infections for table 2
+
+generate_summary_table <- function(data) {
+  var_name <- sub("_cov$", "", deparse(substitute(data)))
+  
+  tbl <- data %>%
+    ungroup() %>%
+    select(-individual, -sample) %>%
+    tbl_summary(by = var_name) %>%
+    modify_header(label = "**Variable**") %>%
+    modify_caption("Table 1. Descriptive statistics of Seattle Flu Study SCAN unique individuals stratified by Subsequent presence of SARS-CoV-2 Infection") %>%
+    bold_labels() %>%
+    as_flex_table() %>% 
+    flextable::fontsize(size = 15, part = "all") %>%
+    theme_apa() %>%
+    bg(bg = "white", part = "body") %>%
+    bg(bg = "white", part = "header")
+  
+  return(tbl)
+}
+
+generate_summary_table(Rhinovirus_TimeDependent_cov)
+```
+
+
+
+
+
+## (9) CT value subsequent to infection analysis
 
 ```{r}
 # Get subsequent positive covid tests
@@ -1822,701 +2234,116 @@ Rhinovirus_TimeDependent_cov %>%
 
 
 
-#Table 1
-```{r}
-
-# Figure to show what is circualting around that time
-
-DtAdjusted %>%
-  mutate(med = mean(stop_adjusted- start_adjusted))
-# Table 1: Clinical and Demographic Characteristics of Study Participants by Type of Respiratory Virus Detected Among Unique Nasal Swab Specimens
-
-# Filter out 'other' gender entries
-filtered_data <- DtAdjusted %>%
-  filter(sex != "other")
-length(unique(DtAdjusted$individual))
-# Summarize demographic characteristics
-table_demog <- filtered_data %>%
-  summarize(
-    Total_Specimens_Tested = n(),
-    None_Detected_N = sum(present_rv_n == 0 & present_sars_cov_2_n == 0 & present_rsv_n == 0 & present_adv_n == 0 & present_iav_n == 0 & present_ibv_n == 0),
-    
-    Rhinovirus_N = sum(present_rv_n > 0),
-    Covid_N = sum(present_sars_cov_2_n > 0),
-    RSV_N = sum(present_rsv_n > 0),
-    Adenovirus_N = sum(present_adv_n > 0),
-    Influenza_A_N = sum(present_iav_n > 0),
-    Influenza_B_N = sum(present_ibv_n > 0),
-        Co_Detection = sum(rowSums(select(., present_rv_n, present_sars_cov_2_n, present_rsv_n, present_adv_n, present_iav_n, present_ibv_n)) > 2))
-
-
-
-# Define the total number of specimens tested
-total_tested <- table_demog$Total_Specimens_Tested
-
-# Calculate the number and percentage of specimens with no virus detected
-none_detected_count <- table_demog$None_Detected_N
-none_detected_percent <- none_detected_count / total_tested * 100
-
-# Calculate the number and percentage of specimens with Human Rhinovirus detected
-rhinovirus_count <- table_demog$Rhinovirus_N
-rhinovirus_percent <- rhinovirus_count / total_tested * 100
-
-# Calculate the number and percentage of specimens with SARS-CoV-2 detected
-covid_count <- table_demog$Covid_N
-covid_percent <- covid_count / total_tested * 100
-
-# Calculate the number and percentage of specimens with RSV detected
-rsv_count <- table_demog$RSV_N
-rsv_percent <- rsv_count / total_tested * 100
-
-# Calculate the number and percentage of specimens with Adenovirus detected
-adenovirus_count <- table_demog$Adenovirus_N
-adenovirus_percent <- adenovirus_count / total_tested * 100
-
-# Calculate the number and percentage of specimens with Influenza A detected
-influenza_a_count <- table_demog$Influenza_A_N
-influenza_a_percent <- influenza_a_count / total_tested * 100
-
-# Calculate the number and percentage of specimens with Influenza B detected
-influenza_b_count <- table_demog$Influenza_B_N
-influenza_b_percent <- influenza_b_count / total_tested * 100
-
-# Calculate the number and percentage of specimens with Co-detection
-co_detection_count <- table_demog$Co_Detection
-co_detection_percent <- co_detection_count / total_tested * 100
-
-# Create the table
-# Create the table
-table1 <- data.frame(
-  "Characteristic" = c("Total Specimens Tested", "No Virus Detected", "Rhinovirus Detected", "SARS-CoV-2 Detected", "RSV Detected", "Adenovirus Detected", "Influenza A Detected", "Influenza B Detected", "Co-Detection"),
-  "Count" = c(total_tested, none_detected_count, rhinovirus_count, covid_count, rsv_count, adenovirus_count, influenza_a_count, influenza_b_count, co_detection_count),
-  "Percentage" = c(100, none_detected_percent, rhinovirus_percent, covid_percent, rsv_percent, adenovirus_percent, influenza_a_percent, influenza_b_percent, co_detection_percent)
-)
-
-table1
-length(unique(DtAdjusted$individual))
-```
-
-
-```{r}
-
-# Define the covariates of interest
-covariates <- c("Sex", "Age group", "Self-Reported Symptoms")
-
-# Table 2: Secondary group
-DtAdjusted %>%
-  mutate(agebin = case_when(
-    agebin %in% c("<1", "1-5") ~ "< 5",
-    TRUE ~ as.character(agebin)
-  )) %>%
-  filter(!sex == "other") %>%
-  mutate(none_detected = (present_rv_n == 0 & present_sars_cov_2_n == 0 & present_rsv_n == 0 & present_adv_n == 0 & present_iav_n == 0 & present_ibv_n == 0)) %>%
-  mutate(co_detect = (present_rv_n == 1 & present_sars_cov_2_n == 1) | (present_rv_n == 1 & present_rsv_n == 1) | (present_rv_n == 1 & present_adv_n == 1) | (present_rv_n == 1 & present_iav_n == 1) | (present_rv_n == 1 & present_ibv_n == 1) | 
-                       (present_sars_cov_2_n == 1 & present_rsv_n == 1) | (present_sars_cov_2_n == 1 & present_adv_n == 1) | (present_sars_cov_2_n == 1 & present_iav_n == 1) | (present_sars_cov_2_n == 1 & present_ibv_n == 1) | 
-                       (present_rsv_n == 1 & present_adv_n == 1) | (present_rsv_n == 1 & present_iav_n == 1) | (present_rsv_n == 1 & present_ibv_n == 1) | 
-                       (present_adv_n == 1 & present_iav_n == 1) | (present_adv_n == 1 & present_ibv_n == 1) | 
-                       (present_iav_n == 1 & present_ibv_n == 1)) %>%
-  dplyr::select(-individual, -sample) %>%
-  tbl_summary(
-    by = "agebin",
-    #statistic = list(
-    #  all_continuous() ~ "{n} ({p}%)"
-    #),
-    missing = "no"
-  ) %>%
-  modify_header(label = "**Variable**") %>%
-  modify_caption("Table 2. Descriptive statistics of Seattle Flu Study SCAN unique individuals stratified by Subsequent presence of SARS-CoV-2 Infection") %>%
-  bold_labels() %>%
-  as_flex_table() %>%
-  flextable::fontsize(size = 15, part = "all") %>%
-  theme_apa() %>%
-  bg(bg = "white", part = "body") %>%
-  bg(bg = "white", part = "header")
-
-
-
-
-# generate function secondary infections for table 2
-
-generate_summary_table <- function(data) {
-  var_name <- sub("_cov$", "", deparse(substitute(data)))
-  
-  tbl <- data %>%
-    ungroup() %>%
-    select(-individual, -sample) %>%
-    tbl_summary(by = var_name) %>%
-    modify_header(label = "**Variable**") %>%
-    modify_caption("Table 1. Descriptive statistics of Seattle Flu Study SCAN unique individuals stratified by Subsequent presence of SARS-CoV-2 Infection") %>%
-    bold_labels() %>%
-    as_flex_table() %>% 
-    flextable::fontsize(size = 15, part = "all") %>%
-    theme_apa() %>%
-    bg(bg = "white", part = "body") %>%
-    bg(bg = "white", part = "header")
-  
-  return(tbl)
-}
-
-generate_summary_table(Rhinovirus_TimeDependent_cov)
-```
-
-
-
-
-
-
-
-```{r}
-#Visualizing 
-
-encounter_rv_cv_pair_2weeks %>%
-  na.omit() %>%
-  ggplot(aes(x = rv_cv_diff, y = present_cv_n, group = present_rv_n, color = as.factor(present_rv_n))) +
-  #geom_point()+
-  geom_smooth()+
-  #eom_smooth(method = "glm", method.args = list(family = "binomial"), se = T) +  # Use logistic regression line
-  theme_minimal() +  # Use a minimal theme
-  labs(title = "Association Between RV and COVID Infections within 8 weeks",
-       x = "Time Since RV Infection (Days)",
-       y = "COVID Infection",
-       color = "RV Presence") +
-  scale_color_manual(values = c("0" = "blue", "1" = "red")) +  # Customize color scale
-  theme(legend.title = element_text(face = "bold", size = 10),
-        legend.text = element_text(size = 8),
-        axis.title = element_text(face = "bold", size = 10),
-        axis.text = element_text(size = 8),
-        plot.title = element_text(face = "bold", size = 12)) 
-
-
-
-
-encounter_rv_cv_pair_8weeks_band <- transform(encounter_rv_cv_pair_8weeks,
-                                            time_period = cut(rv_cv_diff,
-                                                             breaks = c(0, 5, 10, 15, 20, 30, 40, 50, 60),
-                                                             labels = c("0-4 days", "5-9 days", "10-14 days", "15-20 days", "20-30 days", "30-40 days", "40-50 days", "50-60 days")))
-
-
-encounter_rv_cv_pair_8weeks_band <- transform(encounter_rv_cv_pair_8weeks,
-                                            time_period = cut(rv_cv_diff,
-                                                             breaks = c(-1, 0, 5, 10, 15, 20, 30, 40, 50, 60),
-                                                             labels = c("0", "1-4 days", "5-9 days", "10-14 days", "15-20 days", "20-30 days", "30-40 days", "40-50 days", "50-60 days")))
-table(encounter_rv_cv_pair_8weeks_band$time_period)
-
-
-encounter_rv_cv_pair_8weeks_band %>%
-  na.omit() %>%
-  ggplot(aes(x = as.factor(time_period), y = present_cv_n, color = as.factor(present_rv_n),
-             group = present_rv_n)) +
-  #geom_violin(alpha = 0.6) +
-  #stat_smooth(method = "glm", method.args = list(family = "binomial"), se = FALSE) +  
-  sm_pointplot(legends = T) +  
-  scale_color_manual(values = sm_palette(2))+
-  labs(title = "Proportion comparison between RV and COVID Infections within 8 weeks",
-       x = "Time Since RV Infection (Days)",
-    #   y = "Probability of COVID Infection",
-       color = "RV Presence") +
-  theme(legend.title = element_text(face = "bold", size = 10),
-        legend.text = element_text(size = 8),
-        axis.title = element_text(face = "bold", size = 10),
-        axis.text = element_text(size = 8),
-        plot.title = element_text(face = "bold", size = 12))
-
-encounter_rv_cv_pair_8weeks_band %>%
-  na.omit() %>%
-  ggplot(aes(x = rv_cv_diff)) +
-  #geom_violin(alpha = 0.6) +
-  #stat_smooth(method = "glm", method.args = list(family = "binomial"), se = FALSE) +  
-  sm_hist(legends = T) +  
-  scale_color_manual(values = sm_palette(2))+
-  labs(title = "distribution of available events",
-       x = "Time Since RV Infection (Days)",
-    #   y = "Probability of COVID Infection",
-       color = "RV Presence") +
-  theme(legend.title = element_text(face = "bold", size = 10),
-        legend.text = element_text(size = 8),
-        axis.title = element_text(face = "bold", size = 10),
-        axis.text = element_text(size = 8),
-        plot.title = element_text(face = "bold", size = 12))
-
-
-
-```
-
-
-
-
-
-
 
 
 # Hypothesis: Covid decrease/increase RV infectivity odds
 
 
-```{r}
 
-
-encounter_with_multiple_data_rv = full_encounter_sample_vacc %>%
-  filter(organism == "Rhinovirus") %>%
-  select(individual, present, date ) %>%
-  rename(present_rv = present,
-         encountered_date_rv = date) %>%
-  na.omit()
-
-encounter_with_multiple_data_cv = full_encounter_sample_vacc %>%
-  filter(organism == "SARS_CoV_2") %>%
-  select(individual, present, date ) %>%
-  rename(present_cv = present,
-         encountered_date_cv = date) %>%
-  na.omit()
-
-
-encounter_cv_rv_pairs = encounter_with_multiple_data_rv %>%
-  inner_join(encounter_with_multiple_data_cv, by="individual")
-
-
-encounter_cv_rv_pairs = encounter_cv_rv_pairs %>%
-  #filter(encountered_week_cv > encountered_week_rv) %>%
-  mutate(present_cv_n = as.integer(as.logical(present_cv))) %>%
-  mutate(present_rv_n = as.integer(as.logical(present_rv))) %>%
-  mutate(cv_rv_diff = encountered_date_rv - encountered_date_cv)
-
-
-encounter_cv_rv_pairs$cv_rv_diff <- as.numeric(encounter_cv_rv_pairs$cv_rv_diff, units = "days")
-
-
-#Cleaning vaccination dataset
-full_encounter_sample_vacc_analysis_rv = full_encounter_sample_vacc %>%
-  select(individual, sex, age,covidshot1date, covidshot2date, covidshot3date, date ) %>%
-  na.omit("individual") %>%
-  rename(encountered_date_rv = date )
-
-
-#Merge covariates and vaccination data
-encounter_cv_rv_pairs_conf = encounter_cv_rv_pairs %>%
-  left_join(full_encounter_sample_vacc_analysis_rv, by = c("individual","encountered_date_rv")) %>%
-  distinct()
-
-#Replace missing dates with non-vaccination
-encounter_cv_rv_pairs_conf$covidshot1date[encounter_cv_rv_pairs_conf$covidshot1date==""]<-"Notvaccinated"
-encounter_cv_rv_pairs_conf$covidshot2date[encounter_cv_rv_pairs_conf$covidshot2date==""]<-"Notvaccinated"
-encounter_cv_rv_pairs_conf$covidshot3date[encounter_cv_rv_pairs_conf$covidshot3date==""]<-"Notvaccinated"
-
-encounter_cv_rv_pairs_conf = encounter_cv_rv_pairs_conf %>%
-  mutate(across(starts_with("covid"), ~ gsub("\\[|\\]|\\(|\\)|\"", "", .))) %>%
-  na.omit()
-
-encounter_cv_rv_pairs_conf = encounter_cv_rv_pairs_conf %>%
-  mutate(across(c(covidshot1date, covidshot2date, covidshot3date), na_if, "Notvaccinated"))
-
-
-#Mutate vaccination status variable
-encounter_cv_rv_pairs_conf <- encounter_cv_rv_pairs_conf %>%
- mutate(
-    covidshot1date = as.Date(covidshot1date),
-    covidshot2date = as.Date(covidshot2date),
-    covidshot3date = as.Date(covidshot3date)
-  ) %>%
-  mutate(
-    vacc_status_at_enc_rv = case_when(
-      covidshot1date > encountered_date_rv ~ "not_vaccinated",
-      covidshot1date < encountered_date_rv & covidshot2date > encountered_date_rv ~ "partially_vaccinated",
-      covidshot1date < encountered_date_rv & covidshot2date < encountered_date_rv ~ "fully_vaccinated",
-      covidshot1date < encountered_date_rv & covidshot2date < encountered_date_rv & covidshot3date < encountered_date_rv ~ "boosted",
-      TRUE ~ NA_character_  # Handles any other cases
-    )
-  ) 
-
-
-encounter_cv_rv_pairs_conf = encounter_cv_rv_pairs_conf %>%
-    mutate(vacc_status_at_enc_rv = replace_na(vacc_status_at_enc_rv, "not_vaccinated")) %>%
-  select(-covidshot1date, -covidshot2date, -covidshot3date)
-table(encounter_rv_cv_pairs_conf$rv_cv_diff)
-
-#Defining periods
-
-encounter_cv_rv_pair_2weeks = encounter_cv_rv_pairs_conf %>%
-  filter(cv_rv_diff < 14 &
-           cv_rv_diff > 0) %>%
-  na.omit()
-
-table(encounter_rv_cv_pair_2weeks$rv_cv_diff)
-
-encounter_cv_rv_pair_4weeks = encounter_cv_rv_pairs_conf %>%
-  filter(cv_rv_diff < 30 &
-           cv_rv_diff > 0) %>%
-  na.omit()
-
-
-encounter_cv_rv_pair_8weeks = encounter_cv_rv_pairs_conf %>%
-  filter(cv_rv_diff < 60 &
-          cv_rv_diff > -1) %>%
-  na.omit()
-
-#Running models
-
-#within 14 days
-regress("odds", formula = present_rv_n~present_cv_n*cv_rv_diff + sex  +age +vacc_status_at_enc_rv, data = encounter_cv_rv_pair_2weeks)
-
-#within 30 days
-regress("odds", formula = present_rv_n~present_cv_n*cv_rv_diff + sex  +age +vacc_status_at_enc_rv, data = encounter_cv_rv_pair_4weeks)
-
-#within 60 days
-regress("odds", formula = present_rv_n~present_cv_n*cv_rv_diff + sex +age + vacc_status_at_enc_rv, data = encounter_cv_rv_pair_8weeks)
-
-#x axis rv_Cs_diff faceting by presence rv, y = presence for cv
-
-encounter_cv_rv_pair_4weeks %>%
-  na.omit() %>%
-  ggplot(aes( x = cv_rv_diff, y =  present_rv_n, group = present_cv_n , color = as.factor(present_cv_n))) +
-  #geom_point()+
-  geom_smooth() +
-  theme_classic()# +
-  #acet_wrap(~Race)
-
-encounter_cv_rv_pair_8weeks %>%
-  na.omit() %>%
-  ggplot(aes(x = cv_rv_diff, y = present_rv_n, group = present_cv_n, color = as.factor(present_cv_n))) +
-  #geom_point()+
-  geom_smooth()+
-  #eom_smooth(method = "glm", method.args = list(family = "binomial"), se = T) +  # Use logistic regression line
-  theme_minimal() +  # Use a minimal theme
-  labs(title = "Association Between RV and COVID Infections within 8 weeks",
-       x = "Time Since CV Infection (Days)",
-       y = "RV Infection Probability",
-       color = "RV Presence") +
-  scale_color_manual(values = c("0" = "blue", "1" = "red")) +  # Customize color scale
-  theme(legend.title = element_text(face = "bold", size = 10),
-        legend.text = element_text(size = 8),
-        axis.title = element_text(face = "bold", size = 10),
-        axis.text = element_text(size = 8),
-        plot.title = element_text(face = "bold", size = 12)) 
-
-#Idea
-#Hospitalization data? admittance?? ask about
-
-
-encounter_cv_rv_pair_8weeks %>%
-  na.omit() %>%
-  ggplot(aes(x = cv_rv_diff, y = present_rv_n, color = as.factor(present_cv_n))) +
-  #geom_point(alpha = 0.6) +
-  stat_smooth(method = "glm", method.args = list(family = "binomial"), se = FALSE) +  
-  theme_minimal() +  
-  labs(title = "Association Between RV and COVID Infections within 8 weeks",
-       x = "Time Since COVID Infection (Days)",
-       y = "Probability of RV Infection",
-       color = "RV Presence") +
-  scale_color_manual(values = c("0" = "blue", "1" = "red")) +
-  theme(legend.title = element_text(face = "bold", size = 10),
-        legend.text = element_text(size = 8),
-        axis.title = element_text(face = "bold", size = 10),
-        axis.text = element_text(size = 8),
-        plot.title = element_text(face = "bold", size = 12))
-
-
-
-
-
-```
-
-
-```{r}
-
-# Define the function to create the categorical time-dependent covariate
-Create.Time.Dependent_Variable_cv <- function(data, cv_rv_diff, time_periods) {
-  breaks <- c(-Inf, time_periods, Inf)
-  labels <- c(paste0("0-", time_periods[1]), 
-              paste0(time_periods[-length(time_periods)], "-", time_periods[-1]), 
-              paste0(time_periods[length(time_periods)], "-Inf"))
-  
-  data$Time_Dependent_Category <- cut(data[[cv_rv_diff]], breaks = breaks, labels = labels, right = FALSE)
-  
-  return(data)
-}
-# Define the time periods
-time_periods <- c(14, 30, 60, 90, 180)  # Define the time periods in days
-
-# Apply the function to your dataset to create the categorical time-dependent variable
-encounter_cv_rv_pairs_conf <- Create.Time.Dependent_Variable_cv(encounter_cv_rv_pairs_conf, 
-                                                             "cv_rv_diff", 
-                                                             time_periods)
-
-table(encounter_rv_cv_pairs_conf$Time_Dependent_Category)
-
-
-
-
-```
-
-
-
-
-# Sample Size Calculations RV>CV
-```{r}
-size_sum(encounter_cv_rv_pair_2weeks) 
-size_sum(encounter_cv_rv_pair_4weeks)
-size_sum(encounter_cv_rv_pair_8weeks)
-
-table(encounter_rv_cv_pair_8weeks$present_rv_n)
-range(encounter_rv_cv_pair_8weeks$encountered_date_cv)
-
-
-prob.event <- function(lambda, accrual, followup){
-   probEvent <- 1 - (1/(accrual*lambda))*
-  (exp(-lambda*followup) - exp(-lambda*(accrual + followup)))
-   probEvent
-}
-```
-
-
-
-
-
-
-
-
-
-
-
-
-
-```{r}
-
-
-encounter_cv_rv_pair_8weeks_band <- transform(encounter_cv_rv_pair_8weeks,
-                                            time_period = cut(cv_rv_diff,
-                                                             breaks = c(-1, 0, 5, 10, 15, 20, 30, 40, 50, 60),
-                                                             labels = c("0", "1-4 days", "5-9 days", "10-14 days", "15-20 days", "20-30 days", "30-40 days", "40-50 days", "50-60 days")))
-
-
-
-
-encounter_cv_rv_pair_8weeks_band %>%
-  na.omit() %>%
-  ggplot(aes(x = as.factor(time_period), y = present_rv_n, color = as.factor(present_cv_n),
-             group = present_cv_n)) +
-  #geom_violin(alpha = 0.6) +
-  #stat_smooth(method = "glm", method.args = list(family = "binomial"), se = FALSE) +  
-  sm_pointplot(legends = T) +  
-  scale_color_manual(values = sm_palette(2))+
-  labs(title = "Proportion comparison between RV and COVID Infections within 8 weeks",
-       x = "Time Since CV Infection (Days)",
-    #   y = "Probability of COVID Infection",
-       color = "CV Presence") +
-  theme(legend.title = element_text(face = "bold", size = 10),
-        legend.text = element_text(size = 8),
-        axis.title = element_text(face = "bold", size = 10),
-        axis.text = element_text(size = 8),
-        plot.title = element_text(face = "bold", size = 12))
-
-```
 
 # Hypothesis: Vaccination effectWithin 3-weeks
 
 ```{r}
-#within 3 weeks, count of present (RV)
-
-vacc_encouter_data = full_data %>%
-  select(individual, present, date, covidshot1date,covidshot2date, covidshot3date, organism, sex, age, 
-         Race, Income) %>%
-  na.omit()
-
-vacc_encouter_data = vacc_encouter_data %>%
-  mutate(Race = fct_recode(
-    Race, "White Non-hispanic" = "{white}", 
-    "Black Non-hispanic" = "{blackOrAfricanAmerican}",
-    "Black Non-hispanic" = "{blackOrAfricanAmerican,white}",
-    "Black Non-hispanic"= "{blackOrAfricanAmerican,other}",
-    "Black Non-hispanic"= "{blackOrAfricanAmerican,nativeHawaiian}",
-    "Black Non-hispanic"= "{blackOrAfricanAmerican,nativeHawaiian,white}",
-    "Asian" = "{asian}",
-    "Asian" = "{asian,white}",
-   "Asian" = "{asian,blackOrAfricanAmerican}",
-   "Asian"= "{asian,nativeHawaiian}",
-   "Asian"= "{asian,blackOrAfricanAmerican,white}",
-   "Asian" = "{asian,other}",
-   "Asian"= "{asian,other,white}",
-   "Asian"= "{asian,nativeHawaiian,white}",
-    "Other" = "{other}", 
-    "dont_say" = "{}",
-    "Other"= "{nativeHawaiian}",
-    "Other"= "{americanIndianOrAlaskaNative}",
-    "Other"= "{americanIndianOrAlaskaNative}",
-   "Other" = "{americanIndianOrAlaskaNative,asian,white}",
-   "Other"= "{asian,blackOrAfricanAmerican,other,white}",
-   "Other"= "{other,white}",
-   "Other"= "{americanIndianOrAlaskaNative,white}",
-   "Other"="{americanIndianOrAlaskaNative,blackOrAfricanAmerican,white}",
-   "Other" = "{nativeHawaiian,white}"
-    )) 
-
-
-vacc_encouter_data = vacc_encouter_data %>%
-  filter(Race %in% c("White Non-hispanic", "Black Non-hispanic", "Asian", "dont_say", "Other")) %>%
-  filter(Income %in% c("100k_125k", "125k_150k", "25k_50k", "50k_75k", "75k_100k", "dont_know", "dont_say",
-                       "less_25k", "more_150k")) %>%
-  na.omit()
-
-
-
-
-
-vacc_encouter_data <- vacc_encouter_data %>%
-  #filter(vacc_status_at_enc == "fully_vaccinated") %>%
-  filter(organism %in% c("Rhinovirus")) %>%
-  mutate(present = as.integer(as.logical(present))) %>%
-  mutate(days_since_shot1 = date - as.Date(covidshot1date),
-         days_since_shot2 = date - as.Date(covidshot2date)) %>%
-  na.omit() %>%
-  filter(days_since_shot1 < 180 &
-           days_since_shot1 > 0) %>%
-  mutate(within_30_days_sh1 = ifelse(days_since_shot1 < 30, TRUE, FALSE),
-         within_30_days_sh2 = ifelse(days_since_shot2 < 30, TRUE, FALSE),
-         within_30_days = within_30_days_sh1 | within_30_days_sh2)
-  
-
-#Need to find most recent vaccination followed by a rhinovirus infection  
-#Treat vaccination as infection, time since last vaccination
-
-
-regress("odds", formula = present~within_30_days+age+Income+Race+sex, data =  vacc_encouter_data)
-
-regress("odds", formula = present~within_30_days_sh2+age+sex+Race+Income , data =  vacc_encouter_data)
-
-
-
-
-
-#vizualizing distribution
-
-vacc_encouter_data %>%
-  ggplot(aes(x = present, group = within_30_days, fill = within_30_days)) +
-  geom_histogram(aes(y = ..density..), bins = 10, position = "dodge", alpha = 0.7) +
-  facet_wrap(~within_30_days) +
-  scale_fill_viridis_d(option = "magma", begin = 0.2, end = 0.8) +  # Use viridis color palette
-  theme_classic() +
-  labs(title = "Distribution of 'RV present' Within 30 Days of CV vaccination",
-       x = "Present",
-       y = "Density") +
-  theme(legend.position = "top")+
-  xlab("RV Presence")
-
-
-vacc_encouter_data %>%
-  ggplot(aes(x = present, group = within_30_days_sh1, fill = within_30_days_sh1)) +
-  geom_histogram(aes(y = ..density..), bins = 10, position = "dodge", alpha = 0.7) +
-  facet_wrap(~within_30_days_sh1) +
-  scale_fill_viridis_d(option = "magma", begin = 0.2, end = 0.8) +  # Use viridis color palette
-  theme_classic() +
-  labs(title = "Distribution of 'present' Within 30 Days",
-       x = "Present",
-       y = "Density") +
-  theme(legend.position = "top")+
-  xlab("RV Presence")
- 
-
-
-
-```
-
-
-# Regression
-```{r}
-
-
-#Replace missing dates with non-vaccination
-encounter_rv_cv_pairs_conf$covidshot1date[encounter_rv_cv_pairs_conf$covidshot1date==""]<-"Notvaccinated"
-encounter_rv_cv_pairs_conf$covidshot2date[encounter_rv_cv_pairs_conf$covidshot2date==""]<-"Notvaccinated"
-encounter_rv_cv_pairs_conf$covidshot3date[encounter_rv_cv_pairs_conf$covidshot3date==""]<-"Notvaccinated"
-
-encounter_rv_cv_pairs_conf = encounter_rv_cv_pairs_conf %>%
-  mutate(across(starts_with("covid"), ~ gsub("\\[|\\]|\\(|\\)|\"", "", .))) %>%
-  na.omit()
-
-encounter_rv_cv_pairs_conf = encounter_rv_cv_pairs_conf %>%
-  mutate(across(c(covidshot1date, covidshot2date, covidshot3date), na_if, "Notvaccinated"))
-
-
-#Mutate vaccination status variable
-encounter_rv_cv_pairs_conf <- encounter_rv_cv_pairs_conf %>%
- mutate(
-    covidshot1date = as.Date(covidshot1date),
-    covidshot2date = as.Date(covidshot2date),
-    covidshot3date = as.Date(covidshot3date)
-  ) %>%
-  mutate(
-    vacc_status_at_enc_cv = case_when(
-      covidshot1date > date ~ "not_vaccinated",
-      covidshot1date < date & covidshot2date > date ~ "partially_vaccinated",
-      covidshot1date < date & covidshot2date < date ~ "fully_vaccinated",
-      covidshot1date < date & covidshot2date < date & covidshot3date < date ~ "boosted",
-      TRUE ~ NA_character_  # Handles any other cases
-    )
-  ) 
-
-
-encounter_rv_cv_pairs_conf = encounter_rv_cv_pairs_conf %>%
-    mutate(vacc_status_at_enc_cv = replace_na(vacc_status_at_enc_cv, "not_vaccinated")) %>%
-  select(-covidshot1date, -covidshot2date, -covidshot3date)
-
-table(encounter_rv_cv_pairs_conf$vacc_status_at_enc_cv)
-
-
-
-#Defining periods
-
-encounter_rv_cv_pair_2weeks = encounter_rv_cv_pairs_conf %>%
-  filter(rv_cv_diff < 14 &
-           rv_cv_diff > 0) %>%
-  na.omit()
-
-encounter_rv_cv_pair_4weeks = encounter_rv_cv_pairs_conf %>%
-  filter(rv_cv_diff < 30 &
-           rv_cv_diff > 0) %>%
-  na.omit()
-
-encounter_rv_cv_pair_8weeks = encounter_rv_cv_pairs_conf %>%
-  filter(rv_cv_diff < 60 &
-           rv_cv_diff > 0) %>%
-  na.omit()
-
-
-encounter_rv_cv_pair_8weeks = encounter_rv_cv_pairs_conf %>%
-  filter(rv_cv_diff < 90 &
-           rv_cv_diff > 0) %>%
-  na.omit()
-
-
-encounter_rv_cv_pair_8weeks = encounter_rv_cv_pairs_conf %>%
-  filter(rv_cv_diff < 180 &
-           rv_cv_diff > 0) %>%
-  na.omit()
-
-encounter_rv_cv_pair_8weeks %>%
-  na.omit()
-#Running models
-
-#within 14 days
-regress("odds", formula = present_cv_n~present_rv_n*rv_cv_diff  + sex +age+vacc_status_at_enc_cv, data = encounter_rv_cv_pair_2weeks)
-#within 30 days
-regress("odds", formula = present_cv_n~present_rv_n*rv_cv_diff + sex +age +vacc_status_at_enc_cv , data = encounter_rv_cv_pair_4weeks)
-
-names(encounter_rv_cv_pair_4weeks)
-#within 60 days
-regress("odds", formula = present_cv_n~present_rv_n*rv_cv_diff + sex +age+ vacc_status_at_enc_cv, data = encounter_rv_cv_pair_8weeks)
-
-#x axis rv_Cs_diff faceting by presence rv, y = presence for cv
-
-  
-table(encounter_rv_cv_pair_2weeks$rv_cv_diff)
-
-
-encounter_rv_cv_pair_8weeks %>%
-  filter(rv_cv_diff=="0")
-
-
-# Add infection window category variable
-names(encounter_rv_cv_pairs_conf)
+# #within 3 weeks, count of present (RV)
+# 
+# vacc_encouter_data = full_data %>%
+#   select(individual, present, date, covidshot1date,covidshot2date, covidshot3date, organism, sex, age, 
+#          Race, Income) %>%
+#   na.omit()
+# 
+# vacc_encouter_data = vacc_encouter_data %>%
+#   mutate(Race = fct_recode(
+#     Race, "White Non-hispanic" = "{white}", 
+#     "Black Non-hispanic" = "{blackOrAfricanAmerican}",
+#     "Black Non-hispanic" = "{blackOrAfricanAmerican,white}",
+#     "Black Non-hispanic"= "{blackOrAfricanAmerican,other}",
+#     "Black Non-hispanic"= "{blackOrAfricanAmerican,nativeHawaiian}",
+#     "Black Non-hispanic"= "{blackOrAfricanAmerican,nativeHawaiian,white}",
+#     "Asian" = "{asian}",
+#     "Asian" = "{asian,white}",
+#    "Asian" = "{asian,blackOrAfricanAmerican}",
+#    "Asian"= "{asian,nativeHawaiian}",
+#    "Asian"= "{asian,blackOrAfricanAmerican,white}",
+#    "Asian" = "{asian,other}",
+#    "Asian"= "{asian,other,white}",
+#    "Asian"= "{asian,nativeHawaiian,white}",
+#     "Other" = "{other}", 
+#     "dont_say" = "{}",
+#     "Other"= "{nativeHawaiian}",
+#     "Other"= "{americanIndianOrAlaskaNative}",
+#     "Other"= "{americanIndianOrAlaskaNative}",
+#    "Other" = "{americanIndianOrAlaskaNative,asian,white}",
+#    "Other"= "{asian,blackOrAfricanAmerican,other,white}",
+#    "Other"= "{other,white}",
+#    "Other"= "{americanIndianOrAlaskaNative,white}",
+#    "Other"="{americanIndianOrAlaskaNative,blackOrAfricanAmerican,white}",
+#    "Other" = "{nativeHawaiian,white}"
+#     )) 
+# 
+# 
+# vacc_encouter_data = vacc_encouter_data %>%
+#   filter(Race %in% c("White Non-hispanic", "Black Non-hispanic", "Asian", "dont_say", "Other")) %>%
+#   filter(Income %in% c("100k_125k", "125k_150k", "25k_50k", "50k_75k", "75k_100k", "dont_know", "dont_say",
+#                        "less_25k", "more_150k")) %>%
+#   na.omit()
+# 
+# 
+# 
+# 
+# 
+# vacc_encouter_data <- vacc_encouter_data %>%
+#   #filter(vacc_status_at_enc == "fully_vaccinated") %>%
+#   filter(organism %in% c("Rhinovirus")) %>%
+#   mutate(present = as.integer(as.logical(present))) %>%
+#   mutate(days_since_shot1 = date - as.Date(covidshot1date),
+#          days_since_shot2 = date - as.Date(covidshot2date)) %>%
+#   na.omit() %>%
+#   filter(days_since_shot1 < 180 &
+#            days_since_shot1 > 0) %>%
+#   mutate(within_30_days_sh1 = ifelse(days_since_shot1 < 30, TRUE, FALSE),
+#          within_30_days_sh2 = ifelse(days_since_shot2 < 30, TRUE, FALSE),
+#          within_30_days = within_30_days_sh1 | within_30_days_sh2)
+#   
+# 
+# #Need to find most recent vaccination followed by a rhinovirus infection  
+# #Treat vaccination as infection, time since last vaccination
+# 
+# 
+# regress("odds", formula = present~within_30_days+age+Income+Race+sex, data =  vacc_encouter_data)
+# 
+# regress("odds", formula = present~within_30_days_sh2+age+sex+Race+Income , data =  vacc_encouter_data)
+# 
+# 
+# 
+# 
+# 
+# #vizualizing distribution
+# 
+# vacc_encouter_data %>%
+#   ggplot(aes(x = present, group = within_30_days, fill = within_30_days)) +
+#   geom_histogram(aes(y = ..density..), bins = 10, position = "dodge", alpha = 0.7) +
+#   facet_wrap(~within_30_days) +
+#   scale_fill_viridis_d(option = "magma", begin = 0.2, end = 0.8) +  # Use viridis color palette
+#   theme_classic() +
+#   labs(title = "Distribution of 'RV present' Within 30 Days of CV vaccination",
+#        x = "Present",
+#        y = "Density") +
+#   theme(legend.position = "top")+
+#   xlab("RV Presence")
+# 
+# 
+# vacc_encouter_data %>%
+#   ggplot(aes(x = present, group = within_30_days_sh1, fill = within_30_days_sh1)) +
+#   geom_histogram(aes(y = ..density..), bins = 10, position = "dodge", alpha = 0.7) +
+#   facet_wrap(~within_30_days_sh1) +
+#   scale_fill_viridis_d(option = "magma", begin = 0.2, end = 0.8) +  # Use viridis color palette
+#   theme_classic() +
+#   labs(title = "Distribution of 'present' Within 30 Days",
+#        x = "Present",
+#        y = "Density") +
+#   theme(legend.position = "top")+
+#   xlab("RV Presence")
+#  
 
 
 
@@ -2526,192 +2353,51 @@ names(encounter_rv_cv_pairs_conf)
 # Hypothesis: Ct value on y axis for covid and RV ct value on y axis for rhinovirus
 
 
-##Data for CT
-```{r}
-
-#selecting variables of interest for the full data
-full_data_with_ct = full_data1 %>%
-  #filter(!is.na(week)) %>%
-  dplyr::select(individual, organism, present, sample , site, date,ct)  %>%
-  mutate(present = as.character(present))
-
-
-#Merging multiple encounters with original tracking data
-
-
-```
-
-```{r}
-
-encounter_with_multiple_data_rv_ct = full_data_with_ct %>%
-  filter(organism == "Rhinovirus") %>%
-  dplyr::select(individual, present, date, ct ) %>%
-  rename(present_rv = present,
-         encountered_date_rv = date,
-         rv_ct = ct) %>%
-  na.omit("individual")
-
-encounter_with_multiple_data_cv_ct = full_data_with_ct %>%
-  filter(organism == "SARS_CoV_2") %>%
-  dplyr::select(individual, present, date, ct ) %>%
-  rename(present_cv = present,
-         encountered_date_cv = date,
-         covid_ct = ct) %>%
-  na.omit("individual")
-
-
-encounter_rv_cv_pairs_ct = encounter_with_multiple_data_rv_ct %>%
-  inner_join(encounter_with_multiple_data_cv_ct)
-
-encounter_rv_cv_pairs_ct = encounter_rv_cv_pairs_ct %>%
-  #filter(encountered_week_cv > encountered_week_rv) %>%
-  mutate(present_cv_n = as.integer(as.logical(present_cv))) %>%
-  mutate(present_rv_n = as.integer(as.logical(present_rv))) %>%
-  #mutate(rv_cv_diff = encountered_week_cv- encountered_week_rv)
-  mutate(rv_cv_diff = encountered_date_rv- encountered_date_cv)
-
-
-encounter_rv_cv_pairs_ct$rv_cv_diff <- as.numeric(encounter_rv_cv_pairs_ct$rv_cv_diff, units = "days")
-
-
-#adding confounders
-
-encounter_rv_cv_pairs_conf_ct = encounter_rv_cv_pairs_ct %>%
-  inner_join(full_data_conf_clean, by = "individual")
-
-#Defining periods
-
-encounter_rv_cv_pair_2weeks = encounter_rv_cv_pairs_conf_ct %>%
-  filter(rv_cv_diff < 14 &
-           rv_cv_diff > 0)
-
-
-encounter_rv_cv_pair_4weeks = encounter_rv_cv_pairs_conf %>%
-  filter(rv_cv_diff < 30 &
-           rv_cv_diff > 0)
-
-encounter_rv_cv_pair_8weeks_ct = encounter_rv_cv_pairs_ct %>%
-  filter(rv_cv_diff < 60 &
-           rv_cv_diff > -30)
-
-
-rv_cv_tidy = encounter_rv_cv_pair_8weeks_ct %>%
-  select(present_cv_n, rv_cv_diff, rv_ct) %>%
-  na.omit()
-
-write_tsv(rv_cv_tidy, file = "rv_cv_tidy.txt")
-
-#Running models
-
-#within 14 days
-regress("odds", formula = present_cv_n~present_rv_n*rv_cv_diff + sex + Income +Race+age , data = encounter_rv_cv_pair_2weeks)
-#within 30 days
-regress("odds", formula = present_cv_n~present_rv_n*rv_cv_diff + sex +age+ Race + Income, data = encounter_rv_cv_pair_4weeks)
-
-#within 60 days
-regress("odds", formula = present_cv_n~present_rv_n*rv_cv_diff + sex +age+ Race + Income, data = encounter_rv_cv_pair_8weeks_ct)
-
-#x axis rv_Cs_diff faceting by presence rv, y = presence for cv
-
-  
-table(encounter_rv_cv_pair_2weeks$present_rv_n)
-
-table(encounter_rv_cv_pair_8weeks_ct$rv_cv_diff)
-encounter_rv_cv_pair_8weeks_ct %>%
-  ggplot(aes(x = rv_cv_diff, y = rv_ct, color = as.factor(present_cv_n))) +
-  geom_point()+
-  facet_wrap(~present_cv_n) +
-  #geom_smooth(method = "glm", method.args = list(family = "binomial"), se = TRUE) +  # Use logistic regression line
-  theme_minimal() +  # Use a minimal theme
-  labs(title = "Association Between RV and COVID Infections within 2 weeks",
-       x = "Time Since RV Infection (Days)",
-       y = "COVID Infection Probability",
-       color = "RV Presence") +
-  scale_color_manual(values = c("0" = "blue", "1" = "red")) +  # Customize color scale
-  theme(legend.title = element_text(face = "bold", size = 10),
-        legend.text = element_text(size = 8),
-        axis.title = element_text(face = "bold", size = 10),
-        axis.text = element_text(size = 8),
-        plot.title = element_text(face = "bold", size = 12)) 
-
-encounter_rv_cv_pair_8weeks_ct %>%
-  filter(present_rv_n == "1" & present_cv_n == "1")
-
-```
-
-
-
-```{r}
-# Create a new variable for time periods
-library(ggplot2)
-
-# Create a new variable for time periods
-encounter_rv_cv_pair_8weeks_ct <- transform(encounter_rv_cv_pair_8weeks_ct,
-                                            time_period = cut(rv_cv_diff,
-                                                             breaks = c(0, 5, 10, 15, 20, 30, 40, 50, 60),
-                                                             labels = c("0-4 days", "5-9 days", "10-14 days", "15-20 days", "20-30 days", "30-40 days", "40-50 days", "50-60 days")))
-
-# Create the violin plot with mean points
-ggplot(encounter_rv_cv_pair_8weeks_ct, aes(x = time_period, y = rv_ct, fill = as.factor(present_cv_n))) +
-  geom_violin(trim = FALSE, scale = "width", width = 0.8, show.legend = FALSE) +
-  stat_summary(fun.data = "mean_cl_boot", geom = "point", shape = 18, size = 3, color = "black") +
-  labs(title = "Violin Plot of covid_ct for Different Time Periods",
-       x = "Time Period",
-       y = "rv_ct") +
-  facet_wrap(~present_cv_n) +
-  theme_minimal() +
-  ylim(0,60)+
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-```
-
-
-
 ### Adding Vacc Data
 ```{r}
 
-
-
-DtAdjusted = DtAdjusted %>%
-  mutate(across(starts_with("covid"), ~ gsub("\\[|\\]|\\(|\\)|\"", "", .))) %>%
-  na.omit()
-
-
-#Mutate vaccination status variable
-DtAdjusted <- DtAdjusted %>%
- mutate(
-    covidshot1date = as.Date(covidshot1date),
-    covidshot2date = as.Date(covidshot2date),
-    covidshot3date = as.Date(covidshot3date)
-  ) %>%
-  mutate(
-    vacc_status_at_enc_cv = case_when(
-      covidshot1date > enrollment_date ~ "not_vaccinated",
-      covidshot1date < enrollment_date & covidshot2date > enrollment_date ~ "partially_vaccinated",
-      covidshot1date < enrollment_date & covidshot2date < enrollment_date ~ "fully_vaccinated",
-      covidshot1date < enrollment_date & covidshot2date < enrollment_date & covidshot3date < enrollment_date ~ "boosted" # Handles any other cases
-    )
-  ) 
-
-
-#Replace missing dates with non-vaccination
-DtAdjusted$vacc_status_at_enc_cv[DtAdjusted$covidshot1date==""]<-"not_vaccinated"
-DtAdjusted$vacc_status_at_enc_cv[DtAdjusted$covidshot2date==""]<-"not_vaccinated"
-DtAdjusted$vacc_status_at_enc_cv[DtAdjusted$covidshot3date==""]<-"not_vaccinated"
-#Replace NAs
-DtAdjusted$vacc_status_at_enc_cv[is.na(DtAdjusted$covidshot1date)] <- "not_vaccinated"
-DtAdjusted$vacc_status_at_enc_cv[is.na(DtAdjusted$covidshot2date)] <- "not_vaccinated"
-DtAdjusted$vacc_status_at_enc_cv[is.na(DtAdjusted$covidshot3date)] <- "not_vaccinated"
-
-
-encounter_rv_cv_pairs_conf = encounter_rv_cv_pairs_conf %>%
-    mutate(vacc_status_at_enc_cv = replace_na(vacc_status_at_enc_cv, "not_vaccinated")) %>%
-  select(-covidshot1date, -covidshot2date, -covidshot3date)
-
-
-DtAdjusted
-table(DtAdjusted$vacc_status_at_enc_cv)
-range(DtAdjusted$enrollment_date)
+# 
+# 
+# DtAdjusted = DtAdjusted %>%
+#   mutate(across(starts_with("covid"), ~ gsub("\\[|\\]|\\(|\\)|\"", "", .))) %>%
+#   na.omit()
+# 
+# 
+# #Mutate vaccination status variable
+# DtAdjusted <- DtAdjusted %>%
+#  mutate(
+#     covidshot1date = as.Date(covidshot1date),
+#     covidshot2date = as.Date(covidshot2date),
+#     covidshot3date = as.Date(covidshot3date)
+#   ) %>%
+#   mutate(
+#     vacc_status_at_enc_cv = case_when(
+#       covidshot1date > enrollment_date ~ "not_vaccinated",
+#       covidshot1date < enrollment_date & covidshot2date > enrollment_date ~ "partially_vaccinated",
+#       covidshot1date < enrollment_date & covidshot2date < enrollment_date ~ "fully_vaccinated",
+#       covidshot1date < enrollment_date & covidshot2date < enrollment_date & covidshot3date < enrollment_date ~ "boosted" # Handles any other cases
+#     )
+#   ) 
+# 
+# 
+# #Replace missing dates with non-vaccination
+# DtAdjusted$vacc_status_at_enc_cv[DtAdjusted$covidshot1date==""]<-"not_vaccinated"
+# DtAdjusted$vacc_status_at_enc_cv[DtAdjusted$covidshot2date==""]<-"not_vaccinated"
+# DtAdjusted$vacc_status_at_enc_cv[DtAdjusted$covidshot3date==""]<-"not_vaccinated"
+# #Replace NAs
+# DtAdjusted$vacc_status_at_enc_cv[is.na(DtAdjusted$covidshot1date)] <- "not_vaccinated"
+# DtAdjusted$vacc_status_at_enc_cv[is.na(DtAdjusted$covidshot2date)] <- "not_vaccinated"
+# DtAdjusted$vacc_status_at_enc_cv[is.na(DtAdjusted$covidshot3date)] <- "not_vaccinated"
+# 
+# 
+# encounter_rv_cv_pairs_conf = encounter_rv_cv_pairs_conf %>%
+#     mutate(vacc_status_at_enc_cv = replace_na(vacc_status_at_enc_cv, "not_vaccinated")) %>%
+#   select(-covidshot1date, -covidshot2date, -covidshot3date)
+# 
+# 
+# DtAdjusted
+# table(DtAdjusted$vacc_status_at_enc_cv)
+# range(DtAdjusted$enrollment_date)
 ```
 
 
@@ -2719,111 +2405,111 @@ range(DtAdjusted$enrollment_date)
 ```{r}
 
 
-
-# Rhinovirus
-encounter_with_multiple_data_rv <- full_encounter_sample_vacc %>%
-  filter(organism == "Rhinovirus") %>%
-  dplyr::select(individual, present, date) %>%
-  rename(present_rv = present) %>%
-  na.omit() %>%
-  group_by(individual, date) %>%
-  arrange(desc(present_rv)) %>%
-  slice(1) %>%
-  ungroup()
-
-
-
-#Covid
-encounter_with_multiple_data_cv = full_encounter_sample_vacc %>%
-  filter(organism %in% c("SARS_CoV_2")) %>%
-  dplyr::select(individual, present, date ) %>%
-  rename(present_cv = present) %>%
-  group_by(individual, date) %>%
-  na.omit() %>%
-  arrange(desc(present_cv)) %>%
-  slice(1) %>%
-  ungroup()
-
-
-# RSV A
-#"IAV..H1N1", "IAV..H3N2", "Adenovirus"
-encounter_with_multiple_data_rsvA <- full_encounter_sample_vacc %>%
-  filter(organism == "RSV.A") %>%
-  dplyr::select(individual, present, date) %>%
-  rename(present_rsvA = present) %>%
-  #na.omit() %>%
-  group_by(individual, date) %>%
-  arrange(desc(present_rsvA)) %>%
-  slice(1) %>%
-  ungroup()
-
-
-# RSV b
-encounter_with_multiple_data_rsvB = full_encounter_sample_vacc %>%
-  filter(organism %in% c("RSV.B")) %>%
-  dplyr::select(individual, present, date ) %>%
-  rename(present_rsvB = present) %>%
-  group_by(individual, date) %>%
-  na.omit() %>%
-  arrange(desc(present_rsvB)) %>%
-  slice(1) %>%
-  ungroup()
-
-#IAV
-encounter_with_multiple_data_h1n1 = full_encounter_sample_vacc %>%
-  filter(organism %in% c("IAV..H1N1")) %>%
-  dplyr::select(individual, present, date ) %>%
-  rename(present_H1N1 = present) %>%
-  group_by(individual, date) %>%
-  na.omit() %>%
-  arrange(desc(present_H1N1)) %>%
-  slice(1) %>%
-  ungroup()
-
-#Adenovirus
-encounter_with_multiple_data_adv = full_encounter_sample_vacc %>%
-  filter(organism %in% c("Adenovirus")) %>%
-  dplyr::select(individual, present, date ) %>%
-  rename(present_adv = present) %>%
-  group_by(individual, date) %>%
-  na.omit() %>%
-  arrange(desc(present_adv)) %>%
-  slice(1) %>%
-  ungroup()
-
-
-
-encounter_rv_cv_pairs <- encounter_with_multiple_data_rv %>%
-  inner_join(encounter_with_multiple_data_cv, by = c("individual", "date")) %>%
-  inner_join(encounter_with_multiple_data_rsvA, by = c("individual", "date")) %>%
-  inner_join(encounter_with_multiple_data_rsvB, by = c("individual", "date")) %>%
-  inner_join(encounter_with_multiple_data_h1n1, by = c("individual", "date")) %>%
-  inner_join(encounter_with_multiple_data_adv, by = c("individual", "date")) %>%
-  group_by(individual) %>%
-  #filter(n() > 1) %>%
-  filter(#as.numeric(difftime(lead(date), date, units = "days")) > 0 &
-          as.numeric(difftime(lead(date), date, units = "days")) < 365) %>%
-  filter(n() > 1)
-
-table(encounter_rv_cv_pairs$present_adv)
-
-
-#Inner join to individuals
-encounter_rv_cv_pairs = encounter_with_multiple_data_rv %>%
-  inner_join(encounter_with_multiple_data_cv) %>%
-  group_by(individual) %>%
-  #filter(n() > 1) %>%
-  filter(#as.numeric(difftime(lead(date), date, units = "days")) > 0 &
-          as.numeric(difftime(lead(date), date, units = "days")) < 365) %>%
-  filter(n() > 1)
-
-
-
-encounter_rv_cv_pairs = encounter_rv_cv_pairs %>%
-  #filter(encountered_week_cv > encountered_week_rv) %>%
-  mutate(present_cv_n = as.integer(as.logical(present_cv))) %>%
-  mutate(present_rv_n = as.integer(as.logical(present_rv))) %>%
-  dplyr::select(-present_rv, -present_cv)
+# 
+# # Rhinovirus
+# encounter_with_multiple_data_rv <- full_encounter_sample_vacc %>%
+#   filter(organism == "Rhinovirus") %>%
+#   dplyr::select(individual, present, date) %>%
+#   rename(present_rv = present) %>%
+#   na.omit() %>%
+#   group_by(individual, date) %>%
+#   arrange(desc(present_rv)) %>%
+#   slice(1) %>%
+#   ungroup()
+# 
+# 
+# 
+# #Covid
+# encounter_with_multiple_data_cv = full_encounter_sample_vacc %>%
+#   filter(organism %in% c("SARS_CoV_2")) %>%
+#   dplyr::select(individual, present, date ) %>%
+#   rename(present_cv = present) %>%
+#   group_by(individual, date) %>%
+#   na.omit() %>%
+#   arrange(desc(present_cv)) %>%
+#   slice(1) %>%
+#   ungroup()
+# 
+# 
+# # RSV A
+# #"IAV..H1N1", "IAV..H3N2", "Adenovirus"
+# encounter_with_multiple_data_rsvA <- full_encounter_sample_vacc %>%
+#   filter(organism == "RSV.A") %>%
+#   dplyr::select(individual, present, date) %>%
+#   rename(present_rsvA = present) %>%
+#   #na.omit() %>%
+#   group_by(individual, date) %>%
+#   arrange(desc(present_rsvA)) %>%
+#   slice(1) %>%
+#   ungroup()
+# 
+# 
+# # RSV b
+# encounter_with_multiple_data_rsvB = full_encounter_sample_vacc %>%
+#   filter(organism %in% c("RSV.B")) %>%
+#   dplyr::select(individual, present, date ) %>%
+#   rename(present_rsvB = present) %>%
+#   group_by(individual, date) %>%
+#   na.omit() %>%
+#   arrange(desc(present_rsvB)) %>%
+#   slice(1) %>%
+#   ungroup()
+# 
+# #IAV
+# encounter_with_multiple_data_h1n1 = full_encounter_sample_vacc %>%
+#   filter(organism %in% c("IAV..H1N1")) %>%
+#   dplyr::select(individual, present, date ) %>%
+#   rename(present_H1N1 = present) %>%
+#   group_by(individual, date) %>%
+#   na.omit() %>%
+#   arrange(desc(present_H1N1)) %>%
+#   slice(1) %>%
+#   ungroup()
+# 
+# #Adenovirus
+# encounter_with_multiple_data_adv = full_encounter_sample_vacc %>%
+#   filter(organism %in% c("Adenovirus")) %>%
+#   dplyr::select(individual, present, date ) %>%
+#   rename(present_adv = present) %>%
+#   group_by(individual, date) %>%
+#   na.omit() %>%
+#   arrange(desc(present_adv)) %>%
+#   slice(1) %>%
+#   ungroup()
+# 
+# 
+# 
+# encounter_rv_cv_pairs <- encounter_with_multiple_data_rv %>%
+#   inner_join(encounter_with_multiple_data_cv, by = c("individual", "date")) %>%
+#   inner_join(encounter_with_multiple_data_rsvA, by = c("individual", "date")) %>%
+#   inner_join(encounter_with_multiple_data_rsvB, by = c("individual", "date")) %>%
+#   inner_join(encounter_with_multiple_data_h1n1, by = c("individual", "date")) %>%
+#   inner_join(encounter_with_multiple_data_adv, by = c("individual", "date")) %>%
+#   group_by(individual) %>%
+#   #filter(n() > 1) %>%
+#   filter(#as.numeric(difftime(lead(date), date, units = "days")) > 0 &
+#           as.numeric(difftime(lead(date), date, units = "days")) < 365) %>%
+#   filter(n() > 1)
+# 
+# table(encounter_rv_cv_pairs$present_adv)
+# 
+# 
+# #Inner join to individuals
+# encounter_rv_cv_pairs = encounter_with_multiple_data_rv %>%
+#   inner_join(encounter_with_multiple_data_cv) %>%
+#   group_by(individual) %>%
+#   #filter(n() > 1) %>%
+#   filter(#as.numeric(difftime(lead(date), date, units = "days")) > 0 &
+#           as.numeric(difftime(lead(date), date, units = "days")) < 365) %>%
+#   filter(n() > 1)
+# 
+# 
+# 
+# encounter_rv_cv_pairs = encounter_rv_cv_pairs %>%
+#   #filter(encountered_week_cv > encountered_week_rv) %>%
+#   mutate(present_cv_n = as.integer(as.logical(present_cv))) %>%
+#   mutate(present_rv_n = as.integer(as.logical(present_rv))) %>%
+#   dplyr::select(-present_rv, -present_cv)
 ```
 
 
